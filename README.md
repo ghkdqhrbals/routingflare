@@ -28,3 +28,11 @@ routingflare is a tiny macOS menu bar app for Cloudflare Tunnel. Use Quick URL f
 swift test --scratch-path .build
 swift run TunnelBar
 ```
+
+## License
+
+routingflare is proprietary, non-commercial software. Use, redistribution, and
+modified distribution require explicit written permission and attribution.
+Commercial use is prohibited without a separate written license.
+
+See [LICENSE](LICENSE).
