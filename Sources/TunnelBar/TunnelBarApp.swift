@@ -210,7 +210,8 @@ final class TunnelBarViewModel: ObservableObject {
     private static let releaseAPIURL = URL(string: "https://api.github.com/repos/ghkdqhrbals/routingflare/releases/latest")!
     static let projectPageURL = URL(string: "https://ghkdqhrbals.github.io/routingflare/")!
     static let releasesURL = URL(string: "https://github.com/ghkdqhrbals/routingflare/releases/latest")!
-    static let koFiURL = URL(string: "https://ko-fi.com/gyumin")!
+    static let koFiURL = URL(string: "https://ko-fi.com/D8X421KF0U")!
+    static let koFiImageURL = URL(string: "https://storage.ko-fi.com/cdn/kofi6.png?v=6")!
 
     init(
         settingsStore: SettingsStoring = UserDefaultsSettingsStore(),
@@ -1394,9 +1395,26 @@ struct MenuContentView: View {
             Button {
                 model.openKoFiPage()
             } label: {
-                Label("Buy Me a Coffee", systemImage: "cup.and.saucer")
+                AsyncImage(url: TunnelBarViewModel.koFiImageURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFit()
+                    case .failure:
+                        Text("Buy Me a Coffee")
+                            .font(.caption.weight(.semibold))
+                    case .empty:
+                        ProgressView()
+                            .controlSize(.small)
+                    @unknown default:
+                        EmptyView()
+                    }
+                }
+                .frame(width: 183, height: 36)
+                .accessibilityLabel("Buy Me a Coffee at ko-fi.com")
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             Divider()
             VStack(alignment: .leading, spacing: 8) {
                 Text(updateSummary)
