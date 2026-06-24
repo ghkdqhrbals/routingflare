@@ -1098,7 +1098,7 @@ final class TunnelBarViewModel: ObservableObject {
     func quickRouteFrom(_ route: LocalProxyRoute) -> String {
         guard let url = quickPublicURLs[route], let host = url.host else {
             if quickRouteIsPending(route) {
-                return "받아오는중 ..."
+                return "Fetching URL..."
             }
             return "Quick URL\(route.targetPath == "/" ? "" : route.targetPath)"
         }
