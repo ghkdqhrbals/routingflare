@@ -1620,7 +1620,6 @@ struct MenuContentView: View {
 
 private struct RoutesTableView: View {
     @State private var copiedValue: String?
-    @State private var hoveredStatusText: String?
 
     let quickRoutes: [LocalProxyRoute]
     let dnsRoutes: [LocalProxyRoute]
@@ -1641,47 +1640,31 @@ private struct RoutesTableView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             tableHeader
-            ZStack(alignment: .bottomLeading) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(quickRoutes, id: \.self) { route in
-                            routeRow(
-                                from: quickRouteFrom(route),
-                                port: route.targetPort,
-                                isActive: runningModes.contains(.quickURL),
-                                isPending: quickRouteIsPending(route),
-                                statusText: nil,
-                                remove: { removeQuickRoute(route) }
-                            )
-                        }
-
-                        ForEach(dnsRoutes, id: \.self) { route in
-                            routeRow(
-                                from: "\(route.hostname)\(displayPath(route.targetPath))",
-                                port: route.targetPort,
-                                isActive: runningModes.contains(.dns),
-                                isPending: dnsUnavailableReason != nil,
-                                statusText: runningModes.contains(.dns) ? nil : dnsUnavailableReason,
-                                remove: { removeDNSRoute(route) }
-                            )
-                        }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(quickRoutes, id: \.self) { route in
+                        routeRow(
+                            from: quickRouteFrom(route),
+                            port: route.targetPort,
+                            isActive: runningModes.contains(.quickURL),
+                            isPending: quickRouteIsPending(route),
+                            statusText: nil,
+                            remove: { removeQuickRoute(route) }
+                        )
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
 
-                if let hoveredStatusText {
-                    Text(hoveredStatusText)
-                        .font(.caption2)
-                        .foregroundStyle(.primary)
-                        .lineLimit(4)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.regularMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .padding(6)
-                        .allowsHitTesting(false)
+                    ForEach(dnsRoutes, id: \.self) { route in
+                        routeRow(
+                            from: "\(route.hostname)\(displayPath(route.targetPath))",
+                            port: route.targetPort,
+                            isActive: runningModes.contains(.dns),
+                            isPending: dnsUnavailableReason != nil,
+                            statusText: runningModes.contains(.dns) ? nil : dnsUnavailableReason,
+                            remove: { removeDNSRoute(route) }
+                        )
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(height: 86)
             .background(Color(nsColor: .textBackgroundColor))
@@ -1724,11 +1707,14 @@ private struct RoutesTableView: View {
             VStack(alignment: .leading, spacing: 2) {
                 copyableText(from, width: nil, truncationMode: .middle)
                 if let statusText {
-                    Text(statusText)
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    tooltippedText(
+                        statusText,
+                        width: nil,
+                        truncationMode: .tail,
+                        font: .caption2,
+                        foregroundStyle: .orange,
+                        copyable: false
+                    )
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1741,23 +1727,47 @@ private struct RoutesTableView: View {
         }
         .frame(height: 43)
         .padding(.horizontal, tableInset)
-        .onHover { hovering in
-            hoveredStatusText = hovering ? statusText : nil
-        }
     }
 
     private func copyableText(_ value: String, width: CGFloat?, truncationMode: Text.TruncationMode) -> some View {
+        tooltippedText(
+            value,
+            width: width,
+            truncationMode: truncationMode,
+            font: .caption,
+            foregroundStyle: .secondary,
+            copyable: true
+        )
+    }
+
+    private func tooltippedText(
+        _ value: String,
+        width: CGFloat?,
+        truncationMode: Text.TruncationMode,
+        font: Font,
+        foregroundStyle: Color,
+        copyable: Bool
+    ) -> some View {
         let isCopied = copiedValue == value
         return Text(isCopied ? "Copied" : value)
-            .font(.caption)
-            .foregroundStyle(isCopied ? .secondary : .secondary)
+            .font(font)
+            .foregroundStyle(isCopied ? .secondary : foregroundStyle)
             .lineLimit(1)
             .truncationMode(truncationMode)
             .frame(width: width, alignment: .leading)
             .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
             .contentShape(Rectangle())
             .onTapGesture {
-                copy(value)
+                if copyable {
+                    copy(value)
+                }
+            }
+            .onHover { hovering in
+                if hovering {
+                    HoverTooltipPresenter.shared.schedule(text: value)
+                } else {
+                    HoverTooltipPresenter.shared.hide()
+                }
             }
     }
 
@@ -1781,5 +1791,91 @@ private struct RoutesTableView: View {
 
     private func displayPath(_ path: String) -> String {
         path == "/" ? "" : path
+    }
+}
+
+@MainActor
+private final class HoverTooltipPresenter {
+    static let shared = HoverTooltipPresenter()
+
+    private var pendingWorkItem: DispatchWorkItem?
+    private var panel: NSPanel?
+
+    func schedule(text: String) {
+        hide()
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let item = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                self?.show(text: trimmed)
+            }
+        }
+        pendingWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: item)
+    }
+
+    func hide() {
+        pendingWorkItem?.cancel()
+        pendingWorkItem = nil
+        panel?.orderOut(nil)
+        panel = nil
+    }
+
+    private func show(text: String) {
+        let content = TooltipBubble(text: text)
+        let hostingView = NSHostingView(rootView: content)
+        let fittingSize = hostingView.fittingSize
+        let size = NSSize(
+            width: min(max(fittingSize.width, 80), 340),
+            height: min(max(fittingSize.height, 28), 180)
+        )
+        hostingView.frame = NSRect(origin: .zero, size: size)
+
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.contentView = hostingView
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.ignoresMouseEvents = true
+        panel.level = .floating
+        panel.collectionBehavior = [.transient, .ignoresCycle]
+
+        let mouse = NSEvent.mouseLocation
+        let visibleFrame = NSScreen.screens.first(where: { $0.frame.contains(mouse) })?.visibleFrame
+            ?? NSScreen.main?.visibleFrame
+            ?? .zero
+        var origin = NSPoint(x: mouse.x + 14, y: mouse.y - size.height - 12)
+        origin.x = min(max(origin.x, visibleFrame.minX + 4), visibleFrame.maxX - size.width - 4)
+        origin.y = min(max(origin.y, visibleFrame.minY + 4), visibleFrame.maxY - size.height - 4)
+        panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        panel.orderFront(nil)
+        self.panel = panel
+    }
+}
+
+private struct TooltipBubble: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.caption2)
+            .foregroundStyle(.primary)
+            .lineLimit(8)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(width: 320, alignment: .leading)
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+            )
     }
 }
