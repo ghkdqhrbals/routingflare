@@ -1398,15 +1398,23 @@ struct MenuContentView: View {
             }
             .buttonStyle(.plain)
             Divider()
-            HStack {
-                Button(action: model.checkForUpdates) {
-                    Label(model.updateStatus.label, systemImage: "arrow.down.circle")
+            VStack(alignment: .leading, spacing: 8) {
+                Text(updateSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button(action: model.checkForUpdates) {
+                        Label(model.updateStatus.label, systemImage: "arrow.down.circle")
+                    }
+                    .disabled(model.updateStatus == .checking || model.updateStatus == .downloading)
+                    if shouldShowInstallUpdate {
+                        Button(action: model.installUpdate) {
+                            Label("Install and Update", systemImage: "square.and.arrow.down")
+                        }
+                        .disabled(model.updateStatus == .checking || model.updateStatus == .downloading)
+                    }
                 }
-                .disabled(model.updateStatus == .checking || model.updateStatus == .downloading)
-                Button(action: model.installUpdate) {
-                    Label("Install Update", systemImage: "square.and.arrow.down")
-                }
-                .disabled(model.updateStatus == .checking || model.updateStatus == .downloading)
             }
             HStack {
                 Spacer()
@@ -1417,6 +1425,34 @@ struct MenuContentView: View {
         }
         .padding(18)
         .frame(width: 340)
+    }
+
+    private var updateSummary: String {
+        switch model.updateStatus {
+        case .idle:
+            return "Current version: \(appVersion)"
+        case .checking:
+            return "Checking for updates. Current version: \(appVersion)"
+        case .available(let version):
+            return "New version available: \(version). Current version: \(appVersion)."
+        case .current:
+            return "Up to date. Current version: \(appVersion)."
+        case .failed(let message):
+            return "Update check failed. Current version: \(appVersion). \(message)"
+        case .downloading:
+            return "Downloading update. Current version: \(appVersion)."
+        case .downloaded:
+            return "Update downloaded. Open the DMG to install."
+        }
+    }
+
+    private var shouldShowInstallUpdate: Bool {
+        switch model.updateStatus {
+        case .available, .downloaded:
+            return true
+        case .idle, .checking, .current, .failed, .downloading:
+            return false
+        }
     }
 
     private func aboutRow(_ title: String, _ value: String) -> some View {
