@@ -1710,6 +1710,7 @@ private struct RoutesTableView: View {
                         .foregroundStyle(.orange)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .help(statusText)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1722,6 +1723,7 @@ private struct RoutesTableView: View {
         }
         .frame(height: 43)
         .padding(.horizontal, tableInset)
+        .help(statusText ?? "")
     }
 
     private func copyableText(_ value: String, width: CGFloat?, truncationMode: Text.TruncationMode) -> some View {
