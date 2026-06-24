@@ -210,6 +210,7 @@ final class TunnelBarViewModel: ObservableObject {
     private static let releaseAPIURL = URL(string: "https://api.github.com/repos/ghkdqhrbals/routingflare/releases/latest")!
     static let projectPageURL = URL(string: "https://ghkdqhrbals.github.io/routingflare/")!
     static let releasesURL = URL(string: "https://github.com/ghkdqhrbals/routingflare/releases/latest")!
+    static let koFiURL = URL(string: "https://ko-fi.com/gyumin")!
 
     init(
         settingsStore: SettingsStoring = UserDefaultsSettingsStore(),
@@ -682,6 +683,10 @@ final class TunnelBarViewModel: ObservableObject {
 
     func openProjectPage() {
         NSWorkspace.shared.open(Self.projectPageURL)
+    }
+
+    func openKoFiPage() {
+        NSWorkspace.shared.open(Self.koFiURL)
     }
 
     func checkForUpdates() {
@@ -1384,6 +1389,12 @@ struct MenuContentView: View {
                 model.openProjectPage()
             } label: {
                 Label("Project Page", systemImage: "safari")
+            }
+            .buttonStyle(.plain)
+            Button {
+                model.openKoFiPage()
+            } label: {
+                Label("Buy Me a Coffee", systemImage: "cup.and.saucer")
             }
             .buttonStyle(.plain)
             Divider()

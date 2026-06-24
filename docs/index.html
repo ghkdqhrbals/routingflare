@@ -1,25 +1,25 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="routingflare is a macOS menu bar app for exposing local development ports through Cloudflare Tunnel."
+      content="routingflare opens a public URL from your local development server through Cloudflare Tunnel."
     />
     <title>routingflare</title>
     <style>
       :root {
         color-scheme: light;
-        --ink: #17211e;
-        --muted: #66716d;
-        --line: #dce4e0;
-        --bg: #f3f6f4;
+        --ink: #111514;
+        --muted: #68716d;
+        --line: #e1e7e4;
+        --bg: #f6f8f7;
         --surface: #ffffff;
-        --dark: #151a1d;
-        --blue: #236ee8;
-        --green: #24b36b;
-        --orange: #ef8e30;
+        --soft: #eef2f0;
+        --blue: #1268f3;
+        --green: #26c967;
+        --shadow: 0 24px 70px rgba(18, 25, 22, 0.12);
       }
 
       * {
@@ -41,25 +41,22 @@
         color: inherit;
       }
 
+      .wrap {
+        width: min(1120px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
       .nav {
         position: sticky;
         top: 0;
-        z-index: 10;
+        z-index: 20;
         border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
         background: color-mix(in srgb, var(--bg) 88%, transparent);
         backdrop-filter: blur(18px);
       }
 
-      .nav-inner,
-      .hero-inner,
-      .section,
-      footer {
-        width: min(1120px, calc(100% - 40px));
-        margin: 0 auto;
-      }
-
       .nav-inner {
-        height: 68px;
+        height: 66px;
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -70,6 +67,7 @@
       .nav-links,
       .actions,
       .meta,
+      .mode-head,
       .status {
         display: flex;
         align-items: center;
@@ -82,13 +80,13 @@
       }
 
       .brand img {
-        width: 36px;
-        height: 36px;
-        border-radius: 9px;
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
       }
 
       .nav-links {
-        gap: 20px;
+        gap: 18px;
         color: var(--muted);
         font-size: 14px;
       }
@@ -104,33 +102,40 @@
         min-height: 42px;
         padding: 0 16px;
         border-radius: 9px;
+        border: 1px solid transparent;
         background: var(--ink);
         color: #ffffff;
         text-decoration: none;
-        font-weight: 750;
+        font-weight: 760;
       }
 
       .button.secondary {
-        background: transparent;
+        background: var(--surface);
+        border-color: var(--line);
         color: var(--ink);
-        border: 1px solid var(--line);
+      }
+
+      .button.kofi {
+        padding: 0;
+        border: 0;
+        background: transparent;
+      }
+
+      .button.kofi img {
+        display: block;
+        height: 36px;
+        border: 0;
       }
 
       .hero {
-        background:
-          radial-gradient(circle at 80% 10%, color-mix(in srgb, var(--orange) 32%, transparent), transparent 26%),
-          radial-gradient(circle at 92% 26%, color-mix(in srgb, var(--green) 22%, transparent), transparent 22%),
-          linear-gradient(135deg, #111719 0%, #23302b 100%);
-        color: #ffffff;
+        padding: 84px 0 72px;
       }
 
-      .hero-inner {
-        min-height: 720px;
+      .hero-grid {
         display: grid;
-        grid-template-columns: 0.86fr 1.14fr;
-        gap: 58px;
+        grid-template-columns: 0.9fr 1.1fr;
+        gap: 56px;
         align-items: center;
-        padding: 82px 0 96px;
       }
 
       h1,
@@ -141,145 +146,142 @@
       }
 
       h1 {
-        font-size: clamp(52px, 8vw, 96px);
+        max-width: 660px;
+        font-size: clamp(54px, 8vw, 104px);
         line-height: 0.92;
         letter-spacing: 0;
       }
 
       .hero-copy {
-        max-width: 560px;
-        margin-top: 26px;
-        color: #d2ded9;
-        font-size: 19px;
-        line-height: 1.62;
+        max-width: 570px;
+        margin-top: 24px;
+        color: var(--muted);
+        font-size: 20px;
+        line-height: 1.58;
       }
 
       .actions {
         flex-wrap: wrap;
         gap: 12px;
-        margin-top: 34px;
-      }
-
-      .hero .button.secondary {
-        color: #ffffff;
-        border-color: rgba(255, 255, 255, 0.24);
-        background: rgba(255, 255, 255, 0.08);
+        margin-top: 32px;
       }
 
       .meta {
         flex-wrap: wrap;
-        gap: 12px;
-        margin-top: 22px;
-        color: #bfd0ca;
+        gap: 14px;
+        margin-top: 18px;
+        color: var(--muted);
         font-size: 14px;
       }
 
-      .screenshot {
+      .hero-shot {
         overflow: hidden;
-        border: 1px solid rgba(255, 255, 255, 0.16);
-        border-radius: 16px;
-        background: #202323;
-        box-shadow: 0 28px 70px rgba(0, 0, 0, 0.42);
+        border: 1px solid #262b29;
+        border-radius: 18px;
+        background: #0c0d0d;
+        box-shadow: var(--shadow);
       }
 
-      .screenshot img {
-        display: block;
-        width: 100%;
-      }
-
-      .screenshots {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 18px;
-      }
-
-      .shot {
-        overflow: hidden;
-        border: 1px solid var(--line);
-        border-radius: 14px;
-        background: #0b0b0b;
-        box-shadow: 0 18px 42px rgba(24, 32, 30, 0.1);
-      }
-
-      .shot.wide {
-        grid-column: 1 / -1;
-      }
-
+      .hero-shot img,
       .shot img {
         display: block;
         width: 100%;
       }
 
       .section {
-        padding: 82px 0;
+        padding: 72px 0;
       }
 
       .section-head {
-        max-width: 760px;
-        margin-bottom: 34px;
+        max-width: 720px;
+        margin-bottom: 28px;
       }
 
       h2 {
-        font-size: clamp(32px, 4vw, 52px);
-        line-height: 1.04;
+        font-size: clamp(34px, 5vw, 58px);
+        line-height: 1;
         letter-spacing: 0;
       }
 
-      .section-head p,
+      .section-head p {
+        margin-top: 14px;
+        color: var(--muted);
+        font-size: 18px;
+        line-height: 1.58;
+      }
+
+      .modes {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+
+      .mode,
+      .feature,
+      .release-panel {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+      }
+
+      .mode {
+        padding: 24px;
+      }
+
+      .mode-head {
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .mode h3 {
+        font-size: 24px;
+      }
+
+      .pill {
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: var(--soft);
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .mode p,
       .feature p,
-      .flow p,
       .release-panel p {
         margin-top: 12px;
         color: var(--muted);
         font-size: 17px;
-        line-height: 1.62;
+        line-height: 1.58;
       }
 
-      .features {
+      .screens {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
         gap: 16px;
       }
 
-      .feature,
-      .flow,
-      .release-panel {
-        background: var(--surface);
+      .shot {
+        overflow: hidden;
         border: 1px solid var(--line);
-        border-radius: 12px;
+        border-radius: 14px;
+        background: #0c0d0d;
+        box-shadow: 0 18px 44px rgba(20, 28, 25, 0.1);
       }
 
-      .feature {
-        padding: 22px;
-      }
-
-      .feature strong,
-      .flow strong {
-        display: block;
-        font-size: 18px;
-      }
-
-      .flow-grid {
+      .features {
         display: grid;
         grid-template-columns: repeat(4, 1fr);
         gap: 14px;
       }
 
-      .flow {
-        min-height: 166px;
+      .feature {
         padding: 20px;
       }
 
-      .flow span {
-        display: inline-grid;
-        width: 30px;
-        height: 30px;
-        place-items: center;
-        margin-bottom: 18px;
-        border-radius: 50%;
-        background: color-mix(in srgb, var(--blue) 14%, #ffffff);
-        color: #1556c7;
-        font-weight: 800;
+      .feature strong {
+        display: block;
+        font-size: 17px;
       }
 
       .release-panel {
@@ -292,7 +294,7 @@
 
       .status {
         gap: 8px;
-        margin-top: 12px;
+        margin-top: 14px;
         color: var(--muted);
         font-size: 14px;
       }
@@ -307,7 +309,7 @@
       code {
         padding: 2px 6px;
         border-radius: 6px;
-        background: color-mix(in srgb, var(--line) 58%, transparent);
+        background: var(--soft);
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       }
 
@@ -319,20 +321,12 @@
       }
 
       @media (max-width: 900px) {
-        .hero-inner,
+        .hero-grid,
+        .modes,
+        .screens,
         .features,
-        .screenshots,
-        .flow-grid,
         .release-panel {
           grid-template-columns: 1fr;
-        }
-
-        .shot.wide {
-          grid-column: auto;
-        }
-
-        .hero-inner {
-          min-height: auto;
         }
 
         .nav-links a:not(.button) {
@@ -343,15 +337,14 @@
   </head>
   <body>
     <nav class="nav">
-      <div class="nav-inner">
+      <div class="wrap nav-inner">
         <a class="brand" href="#">
           <img src="assets/routingflare-icon.png" alt="" />
           <span>routingflare</span>
         </a>
         <div class="nav-links">
-          <a href="#features">Features</a>
-          <a href="#screenshots">Screenshots</a>
-          <a href="#workflow">Workflow</a>
+          <a href="#modes">Modes</a>
+          <a href="#screens">Screens</a>
           <a href="#release">Release</a>
           <a class="button" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">Download</a>
         </div>
@@ -360,109 +353,101 @@
 
     <main>
       <section class="hero">
-        <div class="hero-inner">
+        <div class="wrap hero-grid">
           <div>
-            <h1>routingflare</h1>
+            <h1>Open localhost to the public, fast.</h1>
             <p class="hero-copy">
-              Open local ports through Cloudflare Tunnel from the macOS menu bar.
+              A simple macOS menu bar app for sharing local development ports through Cloudflare Tunnel.
             </p>
             <div class="actions">
               <a class="button" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">Download DMG</a>
-              <a class="button secondary" href="https://github.com/ghkdqhrbals/routingflare">GitHub repo</a>
+              <a class="button secondary" href="https://github.com/ghkdqhrbals/routingflare">GitHub</a>
+              <a class="button kofi" href="https://ko-fi.com/gyumin" target="_blank" rel="noopener">
+                <img height="36" src="https://storage.ko-fi.com/cdn/kofi6.png?v=6" alt="Buy Me a Coffee at ko-fi.com" />
+              </a>
             </div>
             <div class="meta">
-              <span>Latest version: <strong id="latest-version">release page</strong></span>
+              <span>Latest: <strong id="latest-version">release page</strong></span>
               <span>DMG: <a id="dmg-link" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">latest release</a></span>
             </div>
           </div>
-          <div class="screenshot">
-            <img src="assets/routingflare-security.png" alt="routingflare menu bar app showing opened routes, Security tab, allowlist, auth header, and Stop button" />
+          <div class="hero-shot">
+            <img src="assets/routingflare-security.png" alt="routingflare menu bar app with routes, security, and stop controls" />
           </div>
         </div>
       </section>
 
-      <section id="features" class="section">
-        <div class="section-head">
-          <h2>Local port to public URL.</h2>
-        </div>
-        <div class="features">
-          <div class="feature">
-            <strong>Quick URL</strong>
-            <p><code>trycloudflare.com</code> temporary URL.</p>
+      <section id="modes" class="section">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>Two ways to open a route.</h2>
           </div>
-          <div class="feature">
-            <strong>DNS routes</strong>
-            <p>Hostname, path, local port.</p>
-          </div>
-          <div class="feature">
-            <strong>Security</strong>
-            <p>IP allowlist and auth header.</p>
-          </div>
-          <div class="feature">
-            <strong>Routes</strong>
-            <p>From public address to local port.</p>
-          </div>
-          <div class="feature">
-            <strong>Logs</strong>
-            <p>Tunnel and proxy events.</p>
-          </div>
-          <div class="feature">
-            <strong>Updates</strong>
-            <p>Check and install latest DMG.</p>
+          <div class="modes">
+            <div class="mode">
+              <div class="mode-head">
+                <h3>Quick URL</h3>
+                <span class="pill">fast random DNS</span>
+              </div>
+              <p>Generate a temporary <code>trycloudflare.com</code> URL and point it at a local port.</p>
+            </div>
+            <div class="mode">
+              <div class="mode-head">
+                <h3>DNS</h3>
+                <span class="pill">your domain</span>
+              </div>
+              <p>Connect your own hostname to a local port with an existing Cloudflare Tunnel.</p>
+            </div>
           </div>
         </div>
       </section>
 
-      <section id="screenshots" class="section">
-        <div class="section-head">
-          <h2>Toolbar screenshots.</h2>
-        </div>
-        <div class="screenshots">
-          <div class="shot">
-            <img src="assets/routingflare-quick-url.png" alt="routingflare Quick URL tab with port, path, add button, and shared routes table" />
+      <section id="screens" class="section">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>Small toolbar. Clear routes.</h2>
           </div>
-          <div class="shot">
-            <img src="assets/routingflare-dns.png" alt="routingflare DNS tab with tunnel ID, credentials file, DNS route fields, and shared routes table" />
-          </div>
-          <div class="shot wide">
-            <img src="assets/routingflare-security.png" alt="routingflare Security tab with inbound IP allowlist and auth header controls" />
+          <div class="screens">
+            <div class="shot">
+              <img src="assets/routingflare-quick-url.png" alt="routingflare Quick URL route screen" />
+            </div>
+            <div class="shot">
+              <img src="assets/routingflare-dns.png" alt="routingflare DNS route screen" />
+            </div>
+            <div class="shot">
+              <img src="assets/routingflare-security.png" alt="routingflare Security screen" />
+            </div>
           </div>
         </div>
       </section>
 
-      <section id="workflow" class="section">
-        <div class="section-head">
-          <h2>Workflow.</h2>
-        </div>
-        <div class="flow-grid">
-          <div class="flow">
-            <span>1</span>
-            <strong>Local server</strong>
-            <p><code>127.0.0.1:8989</code></p>
-          </div>
-          <div class="flow">
-            <span>2</span>
-            <strong>Add route</strong>
-            <p>Port, path, DNS.</p>
-          </div>
-          <div class="flow">
-            <span>3</span>
-            <strong>Start</strong>
-            <p>Open tunnel.</p>
-          </div>
-          <div class="flow">
-            <span>4</span>
-            <strong>Security</strong>
-            <p>Allowlist, secret header.</p>
+      <section class="section">
+        <div class="wrap">
+          <div class="features">
+            <div class="feature">
+              <strong>Routes</strong>
+              <p>Public address to local port.</p>
+            </div>
+            <div class="feature">
+              <strong>Security</strong>
+              <p>IP allowlist and auth header.</p>
+            </div>
+            <div class="feature">
+              <strong>Logs</strong>
+              <p>Tunnel and proxy events.</p>
+            </div>
+            <div class="feature">
+              <strong>Updates</strong>
+              <p>Check and install latest DMG.</p>
+            </div>
           </div>
         </div>
       </section>
 
       <section id="release" class="section">
-        <div class="release-panel">
+        <div class="wrap release-panel">
           <div>
-            <h2>Public DMG release.</h2>
-            <p>Signed DMG, GitHub Release, latest download link.</p>
+            <h2>Public DMG.</h2>
+            <p>Signed app, GitHub Release, latest download link.</p>
             <div class="status"><span class="dot"></span><span id="release-status">Release metadata loads from docs/release.json.</span></div>
           </div>
           <a class="button" id="release-download" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">Download latest DMG</a>
@@ -470,7 +455,7 @@
       </section>
     </main>
 
-    <footer>
+    <footer class="wrap">
       routingflare
     </footer>
 
