@@ -13,11 +13,11 @@ public enum PublicURLBuilder {
 
         let normalizedPath = trimmedPath.hasPrefix("/") ? trimmedPath : "/" + trimmedPath
         if let questionMark = normalizedPath.firstIndex(of: "?") {
-            components.percentEncodedPath = String(normalizedPath[..<questionMark])
-            components.percentEncodedQuery = String(normalizedPath[normalizedPath.index(after: questionMark)...])
+            components.path = String(normalizedPath[..<questionMark])
+            components.query = String(normalizedPath[normalizedPath.index(after: questionMark)...])
         } else {
-            components.percentEncodedPath = normalizedPath
-            components.percentEncodedQuery = nil
+            components.path = normalizedPath
+            components.query = nil
         }
 
         return components.url

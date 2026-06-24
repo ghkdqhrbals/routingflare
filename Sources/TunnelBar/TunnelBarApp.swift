@@ -431,7 +431,7 @@ final class TunnelBarViewModel: ObservableObject {
             }
 
             status = .running
-            if let firstURL = publicURLs.first {
+            if let firstURL = quickPublicURLs.values.first {
                 publicURL = firstURL
             }
             addRecentPort(activeTargetPort)
@@ -483,7 +483,6 @@ final class TunnelBarViewModel: ObservableObject {
                 }
             )
 
-            activeTunnelModes.insert(.dns)
     }
 
     private func startQuickTunnels() throws {
@@ -926,7 +925,7 @@ final class TunnelBarViewModel: ObservableObject {
         do {
             try startDNSTunnel()
             status = .running
-            publicURL = publicURLs.first
+            publicURL = quickPublicURLs.values.first
         } catch {
             status = .error(error.localizedDescription)
             appendLog("DNS tunnel refresh failed: \(error.localizedDescription)")
@@ -1065,6 +1064,9 @@ final class TunnelBarViewModel: ObservableObject {
 
     var publicURLs: [URL] {
         let quickURLs: [URL] = activeQuickRoutes.compactMap { quickPublicURLs[$0] }
+        guard activeTunnelModes.contains(.dns), dnsCloudflaredIssue == nil else {
+            return quickURLs
+        }
         let dnsURLs: [URL] = activeDNSRoutes.compactMap { route in
             guard let baseURL = URL(string: "https://\(route.hostname)") else {
                 return nil

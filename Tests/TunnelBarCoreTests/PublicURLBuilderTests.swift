@@ -27,6 +27,15 @@ final class PublicURLBuilderTests: XCTestCase {
         XCTAssertEqual(url?.absoluteString, "https://example.trycloudflare.com/console/admin.html?tab=streams")
     }
 
+    func testEncodesInvalidPercentEscapesAndSpacesInTargetPath() {
+        let url = PublicURLBuilder.build(
+            baseURL: URL(string: "https://example.trycloudflare.com")!,
+            targetPath: "/bad%zz path?x=100% bad"
+        )
+
+        XCTAssertEqual(url?.absoluteString, "https://example.trycloudflare.com/bad%25zz%20path?x=100%25%20bad")
+    }
+
     func testBuildsAllHostnameAndPathCombinations() {
         let urls = PublicURLBuilder.buildAll(
             hostnames: ["lowfidev.cloud", "api.lowfidev.cloud"],
