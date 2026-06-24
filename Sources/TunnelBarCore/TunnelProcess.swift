@@ -46,6 +46,7 @@ public final class TunnelProcess {
     public func stop() {
         outputPipe?.fileHandleForReading.readabilityHandler = nil
         if let process, process.isRunning {
+            process.terminationHandler = nil
             process.terminate()
         }
         process = nil

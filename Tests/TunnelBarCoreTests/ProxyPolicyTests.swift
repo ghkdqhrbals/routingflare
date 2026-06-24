@@ -37,4 +37,39 @@ final class ProxyPolicyTests: XCTestCase {
 
         XCTAssertEqual(policy.decision(for: [:]), .blocked(sourceIP: nil))
     }
+
+    func testAllowsRequestWhenAuthHeaderMatches() {
+        let policy = ProxyAccessPolicy(
+            allowlistEntries: [],
+            authHeader: ProxyAuthHeader(enabled: true, name: "X-Routingflare-Secret", secret: "secret")
+        )
+
+        let decision = policy.decision(for: [
+            "X-Routingflare-Secret": "secret"
+        ])
+
+        XCTAssertEqual(decision, .allowed(sourceIP: nil))
+    }
+
+    func testBlocksRequestWhenAuthHeaderDoesNotMatch() {
+        let policy = ProxyAccessPolicy(
+            allowlistEntries: [],
+            authHeader: ProxyAuthHeader(enabled: true, name: "X-Routingflare-Secret", secret: "secret")
+        )
+
+        let decision = policy.decision(for: [
+            "X-Routingflare-Secret": "wrong"
+        ])
+
+        XCTAssertEqual(decision, .blocked(sourceIP: nil))
+    }
+
+    func testDisabledAuthHeaderAllowsRequestWithoutSecret() {
+        let policy = ProxyAccessPolicy(
+            allowlistEntries: [],
+            authHeader: ProxyAuthHeader(enabled: false, name: "X-Routingflare-Secret", secret: "secret")
+        )
+
+        XCTAssertEqual(policy.decision(for: [:]), .allowed(sourceIP: nil))
+    }
 }

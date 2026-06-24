@@ -3,24 +3,31 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="RoutingFlare exposes local development ports through Cloudflare Tunnel from a simple macOS menu bar app." />
-    <title>RoutingFlare</title>
+    <meta
+      name="description"
+      content="routingflare is a macOS menu bar app for exposing local development ports through Cloudflare Tunnel."
+    />
+    <title>routingflare</title>
     <style>
       :root {
         color-scheme: light;
-        --ink: #14211f;
-        --muted: #5c6a65;
-        --line: #dce5e1;
-        --panel: #f7faf9;
-        --bg: #eef4f1;
-        --dark: #101719;
-        --cyan: #37d2d7;
-        --orange: #ff9a3c;
-        --green: #28c876;
+        --ink: #17211e;
+        --muted: #66716d;
+        --line: #dce4e0;
+        --bg: #f3f6f4;
+        --surface: #ffffff;
+        --dark: #151a1d;
+        --blue: #236ee8;
+        --green: #24b36b;
+        --orange: #ef8e30;
       }
 
       * {
         box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
       }
 
       body {
@@ -38,14 +45,15 @@
         position: sticky;
         top: 0;
         z-index: 10;
+        border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+        background: color-mix(in srgb, var(--bg) 88%, transparent);
         backdrop-filter: blur(18px);
-        background: color-mix(in srgb, var(--bg) 86%, transparent);
-        border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
       }
 
       .nav-inner,
+      .hero-inner,
       .section,
-      .hero-inner {
+      footer {
         width: min(1120px, calc(100% - 40px));
         margin: 0 auto;
       }
@@ -55,13 +63,22 @@
         display: flex;
         align-items: center;
         justify-content: space-between;
+        gap: 20px;
+      }
+
+      .brand,
+      .nav-links,
+      .actions,
+      .meta,
+      .status {
+        display: flex;
+        align-items: center;
       }
 
       .brand {
-        display: flex;
-        align-items: center;
         gap: 12px;
         font-weight: 800;
+        text-decoration: none;
       }
 
       .brand img {
@@ -71,11 +88,13 @@
       }
 
       .nav-links {
-        display: flex;
-        align-items: center;
         gap: 20px;
-        font-size: 14px;
         color: var(--muted);
+        font-size: 14px;
+      }
+
+      .nav-links a {
+        text-decoration: none;
       }
 
       .button {
@@ -86,91 +105,134 @@
         padding: 0 16px;
         border-radius: 9px;
         background: var(--ink);
-        color: white;
+        color: #ffffff;
         text-decoration: none;
         font-weight: 750;
       }
 
+      .button.secondary {
+        background: transparent;
+        color: var(--ink);
+        border: 1px solid var(--line);
+      }
+
       .hero {
-        position: relative;
-        min-height: 690px;
-        overflow: hidden;
         background:
-          radial-gradient(circle at 76% 18%, color-mix(in srgb, var(--cyan) 28%, transparent), transparent 28%),
-          radial-gradient(circle at 92% 8%, color-mix(in srgb, var(--orange) 24%, transparent), transparent 22%),
-          linear-gradient(135deg, #0f1719 0%, #1c2927 100%);
-        color: white;
+          radial-gradient(circle at 80% 10%, color-mix(in srgb, var(--orange) 32%, transparent), transparent 26%),
+          radial-gradient(circle at 92% 26%, color-mix(in srgb, var(--green) 22%, transparent), transparent 22%),
+          linear-gradient(135deg, #111719 0%, #23302b 100%);
+        color: #ffffff;
       }
 
       .hero-inner {
+        min-height: 720px;
         display: grid;
         grid-template-columns: 0.86fr 1.14fr;
-        gap: 54px;
+        gap: 58px;
         align-items: center;
-        padding: 78px 0 88px;
+        padding: 82px 0 96px;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
       }
 
       h1 {
-        margin: 0;
-        font-size: clamp(48px, 8vw, 92px);
+        font-size: clamp(52px, 8vw, 96px);
         line-height: 0.92;
         letter-spacing: 0;
       }
 
-      .hero p {
+      .hero-copy {
         max-width: 560px;
-        margin: 26px 0 0;
-        color: #c9d7d2;
+        margin-top: 26px;
+        color: #d2ded9;
         font-size: 19px;
         line-height: 1.62;
       }
 
-      .hero-actions {
-        display: flex;
+      .actions {
         flex-wrap: wrap;
         gap: 12px;
         margin-top: 34px;
       }
 
-      .button.secondary {
-        background: rgba(255, 255, 255, 0.1);
-        border: 1px solid rgba(255, 255, 255, 0.22);
+      .hero .button.secondary {
+        color: #ffffff;
+        border-color: rgba(255, 255, 255, 0.24);
+        background: rgba(255, 255, 255, 0.08);
       }
 
-      .hero-card {
-        border-radius: 24px;
+      .meta {
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 22px;
+        color: #bfd0ca;
+        font-size: 14px;
+      }
+
+      .screenshot {
         overflow: hidden;
         border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 16px;
+        background: #202323;
         box-shadow: 0 28px 70px rgba(0, 0, 0, 0.42);
       }
 
-      .hero-card img {
+      .screenshot img {
+        display: block;
+        width: 100%;
+      }
+
+      .screenshots {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+      }
+
+      .shot {
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: #0b0b0b;
+        box-shadow: 0 18px 42px rgba(24, 32, 30, 0.1);
+      }
+
+      .shot.wide {
+        grid-column: 1 / -1;
+      }
+
+      .shot img {
         display: block;
         width: 100%;
       }
 
       .section {
-        padding: 88px 0;
+        padding: 82px 0;
       }
 
       .section-head {
         max-width: 760px;
-        margin-bottom: 36px;
+        margin-bottom: 34px;
       }
 
       h2 {
-        margin: 0;
         font-size: clamp(32px, 4vw, 52px);
-        line-height: 1.02;
+        line-height: 1.04;
         letter-spacing: 0;
       }
 
       .section-head p,
       .feature p,
-      .workflow p {
+      .flow p,
+      .release-panel p {
+        margin-top: 12px;
         color: var(--muted);
-        line-height: 1.62;
         font-size: 17px;
+        line-height: 1.62;
       }
 
       .features {
@@ -179,85 +241,102 @@
         gap: 16px;
       }
 
-      .feature {
-        background: white;
+      .feature,
+      .flow,
+      .release-panel {
+        background: var(--surface);
         border: 1px solid var(--line);
         border-radius: 12px;
+      }
+
+      .feature {
         padding: 22px;
       }
 
-      .feature strong {
+      .feature strong,
+      .flow strong {
         display: block;
         font-size: 18px;
-        margin-bottom: 8px;
       }
 
-      .screens {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 18px;
-      }
-
-      .screen {
-        background: white;
-        border: 1px solid var(--line);
-        border-radius: 18px;
-        padding: 12px;
-        box-shadow: 0 18px 40px rgba(30, 40, 37, 0.08);
-      }
-
-      .screen img {
-        display: block;
-        width: 100%;
-        border-radius: 12px;
-      }
-
-      .workflow {
+      .flow-grid {
         display: grid;
         grid-template-columns: repeat(4, 1fr);
         gap: 14px;
       }
 
-      .workflow div {
-        min-height: 160px;
-        background: #ffffff;
-        border: 1px solid var(--line);
-        border-radius: 12px;
+      .flow {
+        min-height: 166px;
         padding: 20px;
       }
 
-      .workflow span {
+      .flow span {
         display: inline-grid;
-        place-items: center;
         width: 30px;
         height: 30px;
+        place-items: center;
         margin-bottom: 18px;
         border-radius: 50%;
-        background: color-mix(in srgb, var(--cyan) 20%, white);
-        color: #087c81;
+        background: color-mix(in srgb, var(--blue) 14%, #ffffff);
+        color: #1556c7;
         font-weight: 800;
+      }
+
+      .release-panel {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 20px;
+        align-items: center;
+        padding: 24px;
+      }
+
+      .status {
+        gap: 8px;
+        margin-top: 12px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--green);
+      }
+
+      code {
+        padding: 2px 6px;
+        border-radius: 6px;
+        background: color-mix(in srgb, var(--line) 58%, transparent);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       }
 
       footer {
         padding: 34px 0 54px;
         border-top: 1px solid var(--line);
         color: var(--muted);
+        font-size: 14px;
       }
 
-      @media (max-width: 860px) {
+      @media (max-width: 900px) {
         .hero-inner,
-        .screens,
         .features,
-        .workflow {
+        .screenshots,
+        .flow-grid,
+        .release-panel {
           grid-template-columns: 1fr;
+        }
+
+        .shot.wide {
+          grid-column: auto;
+        }
+
+        .hero-inner {
+          min-height: auto;
         }
 
         .nav-links a:not(.button) {
           display: none;
-        }
-
-        .hero {
-          min-height: auto;
         }
       }
     </style>
@@ -267,13 +346,14 @@
       <div class="nav-inner">
         <a class="brand" href="#">
           <img src="assets/routingflare-icon.png" alt="" />
-          <span>RoutingFlare</span>
+          <span>routingflare</span>
         </a>
         <div class="nav-links">
           <a href="#features">Features</a>
-          <a href="#screens">Screenshots</a>
+          <a href="#screenshots">Screenshots</a>
           <a href="#workflow">Workflow</a>
-          <a class="button" href="https://github.com/gyuminhwangbo/routingflare/releases">Download</a>
+          <a href="#release">Release</a>
+          <a class="button" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">Download</a>
         </div>
       </div>
     </nav>
@@ -282,91 +362,139 @@
       <section class="hero">
         <div class="hero-inner">
           <div>
-            <h1>RoutingFlare</h1>
-            <p>
-              A macOS menu bar app for opening local development ports through Cloudflare Tunnel.
-              Add Quick URL or DNS routes, control inbound IP access, and keep your local server workflow fast.
+            <h1>routingflare</h1>
+            <p class="hero-copy">
+              macOS menu bar app for exposing local development ports through Cloudflare Tunnel.
+              Add Quick URL or DNS routes, restrict inbound access, and update from the app.
             </p>
-            <div class="hero-actions">
-              <a class="button" href="https://github.com/gyuminhwangbo/routingflare/releases">Download DMG</a>
-              <a class="button secondary" href="#screens">View setup</a>
+            <div class="actions">
+              <a class="button" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">Download DMG</a>
+              <a class="button secondary" href="https://github.com/ghkdqhrbals/routingflare">GitHub repo</a>
+            </div>
+            <div class="meta">
+              <span>Latest version: <strong id="latest-version">release page</strong></span>
+              <span>DMG: <a id="dmg-link" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">latest release</a></span>
             </div>
           </div>
-          <div class="hero-card">
-            <img src="assets/quick-screenshot.svg" alt="RoutingFlare Quick URL setup screenshot" />
+          <div class="screenshot">
+            <img src="assets/routingflare-security.png" alt="routingflare menu bar app showing opened routes, Security tab, allowlist, auth header, and Stop button" />
           </div>
         </div>
       </section>
 
       <section id="features" class="section">
         <div class="section-head">
-          <h2>Expose local ports without leaving the menu bar.</h2>
-          <p>RoutingFlare wraps cloudflared with a small local proxy, so each route can map a public path to a local port.</p>
+          <h2>로컬 dev 서버를 메뉴바에서 바로 외부 오픈.</h2>
+          <p>routingflare는 로컬 필터링 프록시를 통해 Cloudflare Tunnel을 열고, 라우팅 리스트를 항상 상단에 보여줍니다.</p>
         </div>
         <div class="features">
           <div class="feature">
-            <strong>Quick URL routes</strong>
-            <p>Create temporary trycloudflare.com routes for local testing without a Cloudflare login.</p>
+            <strong>Quick URL</strong>
+            <p><code>trycloudflare.com</code> 임시 주소를 받아 포트와 path를 로컬 서버로 라우팅합니다.</p>
           </div>
           <div class="feature">
             <strong>DNS routes</strong>
-            <p>Use an existing named Cloudflare Tunnel to map hostnames and paths to local ports.</p>
+            <p>기존 Cloudflare named tunnel 설정으로 hostname, path, local port를 묶어 관리합니다.</p>
           </div>
           <div class="feature">
-            <strong>Inbound IP allowlist</strong>
-            <p>Restrict access with exact IPs or CIDR ranges through the built-in local filtering proxy.</p>
+            <strong>Security</strong>
+            <p>Inbound IP/CIDR allowlist와 optional auth header secret을 재시작 없이 적용합니다.</p>
+          </div>
+          <div class="feature">
+            <strong>Independent routes</strong>
+            <p>Quick URL, DNS, Security, Logs 탭을 바꿔도 라우팅 테이블은 독립적으로 유지됩니다.</p>
+          </div>
+          <div class="feature">
+            <strong>Logs</strong>
+            <p>cloudflared output, public URL 파싱, proxy allow/deny 이벤트를 한 탭에서 확인합니다.</p>
+          </div>
+          <div class="feature">
+            <strong>Updates</strong>
+            <p>About 팝업에서 GitHub Pages 소개 페이지를 열고, 최신 DMG를 체크/다운로드할 수 있습니다.</p>
           </div>
         </div>
       </section>
 
-      <section id="screens" class="section">
+      <section id="screenshots" class="section">
         <div class="section-head">
-          <h2>Built around route visibility.</h2>
-          <p>The route list stays at the top. Quick URL, DNS, and Settings tabs only change what you add or configure next.</p>
+          <h2>Toolbar screenshots.</h2>
+          <p>Quick URL, DNS, Security 탭이 같은 route table을 공유하고, 각 탭은 추가/보안 설정만 담당합니다.</p>
         </div>
-        <div class="screens">
-          <div class="screen">
-            <img src="assets/quick-screenshot.svg" alt="Quick URL route setup showing port and path fields" />
+        <div class="screenshots">
+          <div class="shot">
+            <img src="assets/routingflare-quick-url.png" alt="routingflare Quick URL tab with port, path, add button, and shared routes table" />
           </div>
-          <div class="screen">
-            <img src="assets/dns-settings-screenshot.svg" alt="DNS and Settings setup showing hostname, port, path, and inbound IP allowlist" />
+          <div class="shot">
+            <img src="assets/routingflare-dns.png" alt="routingflare DNS tab with tunnel ID, credentials file, DNS route fields, and shared routes table" />
+          </div>
+          <div class="shot wide">
+            <img src="assets/routingflare-security.png" alt="routingflare Security tab with inbound IP allowlist and auth header controls" />
           </div>
         </div>
       </section>
 
       <section id="workflow" class="section">
         <div class="section-head">
-          <h2>Simple local dev flow.</h2>
+          <h2>동작 흐름.</h2>
         </div>
-        <div class="workflow">
-          <div>
+        <div class="flow-grid">
+          <div class="flow">
             <span>1</span>
-            <strong>Run your dev server</strong>
-            <p>Start a local app on a port like 3000, 8080, or 8989.</p>
+            <strong>로컬 서버 실행</strong>
+            <p><code>127.0.0.1:8989</code> 같은 dev 서버를 먼저 켭니다.</p>
           </div>
-          <div>
+          <div class="flow">
             <span>2</span>
-            <strong>Add a route</strong>
-            <p>Enter port and path for Quick URL, or hostname, port, and path for DNS.</p>
+            <strong>route 추가</strong>
+            <p>Quick URL은 port/path, DNS는 hostname/port/path를 추가합니다.</p>
           </div>
-          <div>
+          <div class="flow">
             <span>3</span>
-            <strong>Start RoutingFlare</strong>
-            <p>RoutingFlare starts a local proxy and opens the Cloudflare Tunnel.</p>
+            <strong>Start</strong>
+            <p>상단 route list 전체를 기준으로 필요한 tunnel/proxy를 실행합니다.</p>
           </div>
-          <div>
+          <div class="flow">
             <span>4</span>
-            <strong>Share safely</strong>
-            <p>Use the Settings tab to manage inbound IP allowlist entries.</p>
+            <strong>접근 제한</strong>
+            <p>Security 탭에서 IP allowlist와 auth header secret을 관리합니다.</p>
           </div>
+        </div>
+      </section>
+
+      <section id="release" class="section">
+        <div class="release-panel">
+          <div>
+            <h2>Public DMG release.</h2>
+            <p>
+              GitHub Actions builds the signed app, packages a DMG, notarizes it when Apple credentials are configured,
+              creates a GitHub Release, and publishes this page with the current DMG link.
+            </p>
+            <div class="status"><span class="dot"></span><span id="release-status">Release metadata loads from docs/release.json.</span></div>
+          </div>
+          <a class="button" id="release-download" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">Download latest DMG</a>
         </div>
       </section>
     </main>
 
     <footer>
-      <div class="section" style="padding: 0;">
-        RoutingFlare is built for local development testing with Cloudflare Tunnel.
-      </div>
+      routingflare is built for local development testing with Cloudflare Tunnel.
     </footer>
+
+    <script>
+      fetch("release.json", { cache: "no-store" })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((release) => {
+          if (!release) return;
+          const version = release.version || "latest";
+          const dmgUrl = release.dmg_url || "https://github.com/ghkdqhrbals/routingflare/releases/latest";
+          document.getElementById("latest-version").textContent = version;
+          document.getElementById("dmg-link").href = dmgUrl;
+          document.getElementById("dmg-link").textContent = release.dmg_name || "DMG";
+          document.getElementById("release-download").href = dmgUrl;
+          document.getElementById("release-status").textContent =
+            `Version ${version} published${release.sha256 ? `, SHA256 ${release.sha256.slice(0, 12)}...` : ""}.`;
+        })
+        .catch(() => {});
+    </script>
   </body>
 </html>

@@ -165,7 +165,11 @@ public final class LocalFilteringProxy {
         let host = request.headers.first { key, _ in
             key.caseInsensitiveCompare("host") == .orderedSame
         }?.value ?? ""
-        return routes.first { $0.matches(host: host, path: request.path) }
+        return routes
+            .filter { $0.matches(host: host, path: request.path) }
+            .max { lhs, rhs in
+                lhs.normalizedTargetPath.count < rhs.normalizedTargetPath.count
+            }
     }
 
     private func send(status: Int, body: String, to connection: NWConnection) {
@@ -217,12 +221,16 @@ public struct LocalProxyRoute: Codable, Equatable, Hashable, Sendable {
         self.targetPath = targetPath
     }
 
+    public var normalizedTargetPath: String {
+        targetPath.isEmpty ? "/" : (targetPath.hasPrefix("/") ? targetPath : "/" + targetPath)
+    }
+
     public func matches(host: String, path: String) -> Bool {
         let candidateHost = host.split(separator: ":").first.map(String.init) ?? host
         guard hostname.isEmpty || candidateHost.caseInsensitiveCompare(hostname) == .orderedSame else {
             return false
         }
-        let normalizedPath = targetPath.isEmpty ? "/" : (targetPath.hasPrefix("/") ? targetPath : "/" + targetPath)
+        let normalizedPath = normalizedTargetPath
         if normalizedPath == "/" {
             return true
         }

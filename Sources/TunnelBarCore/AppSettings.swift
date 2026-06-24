@@ -33,6 +33,8 @@ public struct AppSettings: Codable, Equatable {
     public var dnsRoutes: [LocalProxyRoute]
     public var cloudflaredPath: String
     public var allowlistEntries: [String]
+    public var authHeaderEnabled: Bool
+    public var authHeaderName: String
 
     public init(
         targetPort: Int = 3000,
@@ -50,7 +52,9 @@ public struct AppSettings: Codable, Equatable {
         dnsTargetPaths: [String] = ["/"],
         dnsRoutes: [LocalProxyRoute] = [],
         cloudflaredPath: String = "",
-        allowlistEntries: [String] = []
+        allowlistEntries: [String] = [],
+        authHeaderEnabled: Bool = false,
+        authHeaderName: String = "X-Routingflare-Secret"
     ) {
         self.targetPort = targetPort
         self.recentPorts = recentPorts
@@ -68,6 +72,8 @@ public struct AppSettings: Codable, Equatable {
         self.dnsRoutes = dnsRoutes
         self.cloudflaredPath = cloudflaredPath
         self.allowlistEntries = allowlistEntries
+        self.authHeaderEnabled = authHeaderEnabled
+        self.authHeaderName = authHeaderName
     }
 
     enum CodingKeys: String, CodingKey {
@@ -87,6 +93,8 @@ public struct AppSettings: Codable, Equatable {
         case dnsRoutes
         case cloudflaredPath
         case allowlistEntries
+        case authHeaderEnabled
+        case authHeaderName
     }
 
     public init(from decoder: Decoder) throws {
@@ -129,6 +137,8 @@ public struct AppSettings: Codable, Equatable {
         }
         self.cloudflaredPath = try container.decodeIfPresent(String.self, forKey: .cloudflaredPath) ?? ""
         self.allowlistEntries = try container.decodeIfPresent([String].self, forKey: .allowlistEntries) ?? []
+        self.authHeaderEnabled = try container.decodeIfPresent(Bool.self, forKey: .authHeaderEnabled) ?? false
+        self.authHeaderName = try container.decodeIfPresent(String.self, forKey: .authHeaderName) ?? "X-Routingflare-Secret"
     }
 }
 

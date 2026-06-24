@@ -76,7 +76,8 @@ enum TunnelStatus: Equatable {
 enum AppTab: String, CaseIterable, Identifiable {
     case quickURL
     case dns
-    case settings
+    case security
+    case logs
 
     var id: String { rawValue }
 
@@ -86,8 +87,10 @@ enum AppTab: String, CaseIterable, Identifiable {
             return "Quick URL"
         case .dns:
             return "DNS"
-        case .settings:
-            return "Settings"
+        case .security:
+            return "Security"
+        case .logs:
+            return "Logs"
         }
     }
 
@@ -97,9 +100,80 @@ enum AppTab: String, CaseIterable, Identifiable {
             return .quickURL
         case .dns:
             return .dns
-        case .settings:
+        case .security, .logs:
             return nil
         }
+    }
+}
+
+enum UpdateStatus: Equatable {
+    case idle
+    case checking
+    case available(version: String)
+    case current
+    case failed(String)
+    case downloading
+    case downloaded
+
+    var label: String {
+        switch self {
+        case .idle:
+            return "Check for Updates"
+        case .checking:
+            return "Checking..."
+        case .available(let version):
+            return "Update \(version)"
+        case .current:
+            return "Up to date"
+        case .failed:
+            return "Check failed"
+        case .downloading:
+            return "Downloading..."
+        case .downloaded:
+            return "Downloaded"
+        }
+    }
+}
+
+private struct GitHubRelease: Decodable {
+    let tagName: String
+    let htmlURL: URL?
+    let assets: [GitHubReleaseAsset]
+
+    enum CodingKeys: String, CodingKey {
+        case tagName = "tag_name"
+        case htmlURL = "html_url"
+        case assets
+    }
+}
+
+private struct GitHubReleaseAsset: Decodable {
+    let name: String
+    let browserDownloadURL: URL
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case browserDownloadURL = "browser_download_url"
+    }
+}
+
+private final class QuickTunnelSession {
+    let route: LocalProxyRoute
+    let proxy: LocalFilteringProxy
+    let process: TunnelProcess
+    let configURL: URL
+
+    init(route: LocalProxyRoute, proxy: LocalFilteringProxy, process: TunnelProcess, configURL: URL) {
+        self.route = route
+        self.proxy = proxy
+        self.process = process
+        self.configURL = configURL
+    }
+
+    func stop() {
+        process.stop()
+        proxy.stop()
+        try? FileManager.default.removeItem(at: configURL)
     }
 }
 
@@ -109,6 +183,7 @@ final class TunnelBarViewModel: ObservableObject {
     @Published var selectedTab: AppTab
     @Published var status: TunnelStatus = .stopped
     @Published var publicURL: URL?
+    @Published var quickPublicURLs: [LocalProxyRoute: URL] = [:]
     @Published var proxyPort: Int?
     @Published var requiresRestart = false
     @Published var logs: [String] = []
@@ -118,14 +193,23 @@ final class TunnelBarViewModel: ObservableObject {
     @Published var newQuickPortText = "3000"
     @Published var newTargetPath = ""
     @Published var installInProgress = false
+    @Published var automaticInstallAttempted = false
+    @Published var authHeaderSecret = ""
+    @Published var updateStatus: UpdateStatus = .idle
+    @Published var latestUpdateURL: URL?
 
     private let settingsStore: SettingsStoring
     private let secretStore: SecretStoring
     private let tunnelProcess = TunnelProcess()
     private let accessPolicy: MutableProxyAccessPolicy
     private var proxy: LocalFilteringProxy?
+    private var quickSessions: [QuickTunnelSession] = []
     private var cloudflaredConfigURL: URL?
-    private var activeTunnelMode: TunnelMode?
+    private var activeTunnelModes: Set<TunnelMode> = []
+    private static let authHeaderSecretAccount = "routingflare.authHeaderSecret"
+    private static let releaseAPIURL = URL(string: "https://api.github.com/repos/ghkdqhrbals/routingflare/releases/latest")!
+    static let projectPageURL = URL(string: "https://ghkdqhrbals.github.io/routingflare/")!
+    static let releasesURL = URL(string: "https://github.com/ghkdqhrbals/routingflare/releases/latest")!
 
     init(
         settingsStore: SettingsStoring = UserDefaultsSettingsStore(),
@@ -168,15 +252,22 @@ final class TunnelBarViewModel: ObservableObject {
         self.newDNSPortText = String(loaded.dnsTargetPort)
         self.newQuickPortText = String(loaded.targetPort)
         self.selectedTab = loaded.mode == .quickURL ? .quickURL : .dns
+        let loadedAuthHeaderSecret = secretStore.read(account: Self.authHeaderSecretAccount) ?? ""
+        self.authHeaderSecret = loadedAuthHeaderSecret
         self.settings = loaded
-        self.accessPolicy = MutableProxyAccessPolicy(allowlistEntries: loaded.allowlistEntries)
+        self.accessPolicy = MutableProxyAccessPolicy(
+            allowlistEntries: loaded.allowlistEntries,
+            authHeader: Self.authHeader(
+                enabled: loaded.authHeaderEnabled,
+                name: loaded.authHeaderName,
+                secret: loadedAuthHeaderSecret
+            )
+        )
+        autoInstallCloudflaredIfNeeded()
     }
 
     var canStart: Bool {
-        activeTargetPort > 0 &&
-        activeTargetPort <= 65535 &&
-        hasCloudflared &&
-        ((settings.mode == .quickURL && !activeQuickRoutes.isEmpty) || canStartDNS)
+        hasCloudflared && (!activeQuickRoutes.isEmpty || canStartDNS)
     }
 
     var hasCloudflared: Bool {
@@ -189,12 +280,19 @@ final class TunnelBarViewModel: ObservableObject {
         !settings.dnsCredentialsFile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    var canAddDNSRoute: Bool {
+        parsedPort(newDNSPortText) != nil &&
+        !newDNSHostname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !settings.dnsTunnelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !settings.dnsCredentialsFile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var allowlistSummary: String {
         settings.allowlistEntries.isEmpty ? "Allow all inbound IPs" : "\(settings.allowlistEntries.count) allowed entries"
     }
 
-    var runningMode: TunnelMode? {
-        status.isStarted ? activeTunnelMode : nil
+    var runningModes: Set<TunnelMode> {
+        status.isStarted ? activeTunnelModes : []
     }
 
     func saveSettings() {
@@ -221,12 +319,27 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     func installCloudflaredWithBrew() {
+        installCloudflaredWithBrew(automatic: false)
+    }
+
+    private func autoInstallCloudflaredIfNeeded() {
+        guard !hasCloudflared, !automaticInstallAttempted else { return }
+        guard CloudflaredLocator().brewInstallCommand() != nil else {
+            appendLog("cloudflared was not found. Homebrew was not found for automatic install.")
+            return
+        }
+        automaticInstallAttempted = true
+        installCloudflaredWithBrew(automatic: true)
+    }
+
+    private func installCloudflaredWithBrew(automatic: Bool) {
         guard let command = CloudflaredLocator().brewInstallCommand() else {
             appendLog("Homebrew was not found. Install cloudflared manually from Cloudflare or with Homebrew.")
             return
         }
         installInProgress = true
-        appendLog("Running \(command.executable) \(command.arguments.joined(separator: " "))")
+        let prefix = automatic ? "Automatic install:" : "Running"
+        appendLog("\(prefix) \(command.executable) \(command.arguments.joined(separator: " "))")
 
         Task { [weak self] in
             let process = Process()
@@ -252,54 +365,63 @@ final class TunnelBarViewModel: ObservableObject {
     func start() {
         saveSettings()
         publicURL = nil
+        quickPublicURLs = [:]
         requiresRestart = false
         status = .starting
+        activeTunnelModes = []
 
         do {
+            var startedAnyTunnel = false
+            if !activeQuickRoutes.isEmpty {
+                try startQuickTunnels()
+                startedAnyTunnel = true
+            }
+
+            if canStartDNS {
+                try startDNSTunnel()
+                startedAnyTunnel = true
+            }
+
+            guard startedAnyTunnel else {
+                throw LocalFilteringProxyError.listenerNotReady
+            }
+
+            status = .running
+            if let firstURL = publicURLs.first {
+                publicURL = firstURL
+            }
+            addRecentPort(activeTargetPort)
+        } catch {
+            stop()
+            status = .error(error.localizedDescription)
+            appendLog("Start failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func startDNSTunnel() throws {
             let proxy: LocalFilteringProxy
             let logHandler: @Sendable (String) -> Void = { [weak self] line in
                 Task { @MainActor in
                     self?.appendLog(line)
                 }
             }
-            switch settings.mode {
-            case .quickURL:
-                proxy = LocalFilteringProxy(
-                    routes: activeQuickRoutes,
-                    fallbackTargetPort: activeTargetPort,
-                    accessPolicy: accessPolicy,
-                    logHandler: logHandler
-                )
-            case .dns:
-                proxy = LocalFilteringProxy(
-                    routes: activeDNSRoutes,
-                    fallbackTargetPort: activeTargetPort,
-                    accessPolicy: accessPolicy,
-                    logHandler: logHandler
-                )
-            }
+            proxy = LocalFilteringProxy(
+                routes: activeDNSRoutes,
+                fallbackTargetPort: settings.dnsTargetPort,
+                accessPolicy: accessPolicy,
+                logHandler: logHandler
+            )
             let proxyPort = try proxy.start()
             self.proxyPort = proxyPort
             self.proxy = proxy
 
-            let command: TunnelCommand
-            switch settings.mode {
-            case .quickURL:
-                let configURL = try writeQuickTunnelConfig()
-                command = TunnelCommandBuilder.quickURL(
-                    cloudflaredPath: effectiveCloudflaredPath,
-                    proxyPort: proxyPort,
-                    configPath: configURL.path
-                )
-            case .dns:
-                let configURL = try writeDNSConfig(proxyPort: proxyPort)
-                command = TunnelCommandBuilder.dnsLocalConfig(
-                    cloudflaredPath: effectiveCloudflaredPath,
-                    configPath: configURL.path
-                )
-            }
+            let configURL = try writeDNSConfig(proxyPort: proxyPort)
+            let command = TunnelCommandBuilder.dnsLocalConfig(
+                cloudflaredPath: effectiveCloudflaredPath,
+                configPath: configURL.path
+            )
 
-            appendLog("Exposing local 127.0.0.1:\(activeTargetPort) through proxy 127.0.0.1:\(proxyPort)")
+            appendLog("Exposing DNS routes through proxy 127.0.0.1:\(String(proxyPort))")
             appendLog("Starting cloudflared: \(command.arguments.joined(separator: " "))")
             try tunnelProcess.start(
                 command: command,
@@ -311,26 +433,67 @@ final class TunnelBarViewModel: ObservableObject {
                 onExit: { [weak self] statusCode in
                     Task { @MainActor in
                         self?.appendLog("cloudflared exited with status \(statusCode)")
-                        if self?.status != .stopped {
-                            self?.status = statusCode == 0 ? .stopped : .error("cloudflared exited with status \(statusCode)")
-                        }
+                        self?.handleTunnelExit(mode: .dns, statusCode: statusCode)
                     }
                 }
             )
 
-            if settings.mode == .dns {
-                status = .running
-                if let firstURL = publicURLs.first {
-                    publicURL = firstURL
+            activeTunnelModes.insert(.dns)
+    }
+
+    private func startQuickTunnels() throws {
+        let routes = activeQuickRoutes
+        guard !routes.isEmpty else {
+            throw LocalFilteringProxyError.listenerNotReady
+        }
+
+        for route in routes {
+            try startQuickTunnel(route)
+        }
+
+        activeTunnelModes.insert(.quickURL)
+    }
+
+    private func startQuickTunnel(_ route: LocalProxyRoute) throws {
+        guard !quickSessions.contains(where: { $0.route == route }) else { return }
+        let proxy = LocalFilteringProxy(
+            routes: [route],
+            fallbackTargetPort: route.targetPort,
+            accessPolicy: accessPolicy,
+            logHandler: { [weak self] line in
+                Task { @MainActor in
+                    self?.appendLog(line)
                 }
             }
-            activeTunnelMode = settings.mode
-            addRecentPort(activeTargetPort)
-        } catch {
-            stop()
-            status = .error(error.localizedDescription)
-            appendLog("Start failed: \(error.localizedDescription)")
-        }
+        )
+        let proxyPort = try proxy.start()
+        let configURL = try writeQuickSessionConfig()
+        let command = TunnelCommandBuilder.quickURL(
+            cloudflaredPath: effectiveCloudflaredPath,
+            proxyPort: proxyPort,
+            configPath: configURL.path
+        )
+        let process = TunnelProcess()
+        let session = QuickTunnelSession(route: route, proxy: proxy, process: process, configURL: configURL)
+        quickSessions.append(session)
+
+        appendLog("Exposing quick route \(route.targetPath) -> 127.0.0.1:\(String(route.targetPort)) through proxy 127.0.0.1:\(String(proxyPort))")
+        appendLog("Starting cloudflared: \(command.arguments.joined(separator: " "))")
+        try process.start(
+            command: command,
+            onOutput: { [weak self, route] output in
+                Task { @MainActor in
+                    self?.handleQuickTunnelOutput(output, route: route)
+                }
+            },
+            onExit: { [weak self, route] statusCode in
+                Task { @MainActor in
+                    self?.appendLog("quick route \(route.targetPath) cloudflared exited with status \(statusCode)")
+                    self?.handleQuickTunnelExit(route: route, statusCode: statusCode)
+                }
+            }
+        )
+        activeTunnelModes.insert(.quickURL)
     }
 
     func restart() {
@@ -342,12 +505,17 @@ final class TunnelBarViewModel: ObservableObject {
         tunnelProcess.stop()
         proxy?.stop()
         proxy = nil
+        for session in quickSessions {
+            session.stop()
+        }
+        quickSessions = []
+        quickPublicURLs = [:]
         proxyPort = nil
         if let cloudflaredConfigURL {
             try? FileManager.default.removeItem(at: cloudflaredConfigURL)
             self.cloudflaredConfigURL = nil
         }
-        activeTunnelMode = nil
+        activeTunnelModes = []
         requiresRestart = false
         status = .stopped
         appendLog("Tunnel stopped")
@@ -363,7 +531,7 @@ final class TunnelBarViewModel: ObservableObject {
             if !settings.allowlistEntries.contains(candidate) {
                 settings.allowlistEntries.append(candidate)
             }
-            accessPolicy.update(allowlistEntries: settings.allowlistEntries)
+            updateAccessPolicy()
             newAllowlistEntry = ""
             saveSettings()
         } catch {
@@ -373,14 +541,29 @@ final class TunnelBarViewModel: ObservableObject {
 
     func removeAllowlistEntry(_ entry: String) {
         settings.allowlistEntries.removeAll { $0 == entry }
-        accessPolicy.update(allowlistEntries: settings.allowlistEntries)
+        updateAccessPolicy()
+        saveSettings()
+    }
+
+    func saveAuthHeaderSettings() {
+        settings.authHeaderName = normalizedAuthHeaderName
+        if authHeaderSecret.isEmpty {
+            try? secretStore.delete(account: Self.authHeaderSecretAccount)
+        } else {
+            do {
+                try secretStore.write(authHeaderSecret, account: Self.authHeaderSecretAccount)
+            } catch {
+                appendLog("Auth header secret save failed: \(error.localizedDescription)")
+            }
+        }
+        updateAccessPolicy()
         saveSettings()
     }
 
     func addDNSRoute() {
         let hostname = newDNSHostname.trimmingCharacters(in: .whitespacesAndNewlines)
         var path = newTargetPath.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let port = parsedPort(newDNSPortText), !hostname.isEmpty else { return }
+        guard canAddDNSRoute, let port = parsedPort(newDNSPortText), !hostname.isEmpty else { return }
         if path.isEmpty {
             path = "/"
         }
@@ -388,13 +571,17 @@ final class TunnelBarViewModel: ObservableObject {
             path = "/" + path
         }
         let route = LocalProxyRoute(hostname: hostname, targetPort: port, targetPath: path)
+        var didAdd = false
         if !settings.dnsRoutes.contains(route) {
-            settings.dnsRoutes.append(route)
-            markRestartRequiredIfStarted()
+            settings.dnsRoutes.insert(route, at: 0)
+            didAdd = true
         }
         newDNSHostname = ""
         newTargetPath = ""
         saveSettings()
+        if didAdd {
+            refreshDNSTunnelIfNeeded()
+        }
     }
 
     func addQuickRoute() {
@@ -407,29 +594,34 @@ final class TunnelBarViewModel: ObservableObject {
             path = "/" + path
         }
         let route = LocalProxyRoute(hostname: "", targetPort: port, targetPath: path)
+        var didAdd = false
         if !settings.quickRoutes.contains(route) {
-            settings.quickRoutes.append(route)
+            settings.quickRoutes.insert(route, at: 0)
+            didAdd = true
         }
         newTargetPath = ""
         saveSettings()
+        if didAdd {
+            startQuickRouteIfNeeded(route)
+        }
     }
 
     func removeQuickRoute(_ route: LocalProxyRoute) {
         let oldCount = settings.quickRoutes.count
         settings.quickRoutes.removeAll { $0 == route }
-        if settings.quickRoutes.count != oldCount {
-            markRestartRequiredIfStarted()
-        }
         saveSettings()
+        if settings.quickRoutes.count != oldCount {
+            stopQuickRouteSession(route)
+        }
     }
 
     func removeDNSRoute(_ route: LocalProxyRoute) {
         let oldCount = settings.dnsRoutes.count
         settings.dnsRoutes.removeAll { $0 == route }
-        if settings.dnsRoutes.count != oldCount {
-            markRestartRequiredIfStarted()
-        }
         saveSettings()
+        if settings.dnsRoutes.count != oldCount {
+            refreshDNSTunnelIfNeeded()
+        }
     }
 
     func addTargetPath() {
@@ -488,9 +680,89 @@ final class TunnelBarViewModel: ObservableObject {
         NSWorkspace.shared.open(publicURL)
     }
 
+    func openProjectPage() {
+        NSWorkspace.shared.open(Self.projectPageURL)
+    }
+
+    func checkForUpdates() {
+        guard updateStatus != .checking && updateStatus != .downloading else { return }
+        updateStatus = .checking
+
+        Task { [weak self] in
+            do {
+                let (data, response) = try await URLSession.shared.data(from: Self.releaseAPIURL)
+                guard let httpResponse = response as? HTTPURLResponse,
+                      (200..<300).contains(httpResponse.statusCode) else {
+                    throw URLError(.badServerResponse)
+                }
+                let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
+                await MainActor.run {
+                    self?.applyLatestRelease(release)
+                }
+            } catch {
+                await MainActor.run {
+                    self?.updateStatus = .failed(error.localizedDescription)
+                    self?.appendLog("Update check failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    func installUpdate() {
+        guard updateStatus != .downloading else { return }
+        let url = latestUpdateURL ?? Self.releasesURL
+        guard url.pathExtension.lowercased() == "dmg" else {
+            NSWorkspace.shared.open(url)
+            return
+        }
+
+        updateStatus = .downloading
+        Task { [weak self] in
+            do {
+                let (temporaryURL, _) = try await URLSession.shared.download(from: url)
+                let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first ??
+                    FileManager.default.homeDirectoryForCurrentUser
+                let destination = downloads.appendingPathComponent(url.lastPathComponent)
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    try FileManager.default.removeItem(at: destination)
+                }
+                try FileManager.default.moveItem(at: temporaryURL, to: destination)
+                await MainActor.run {
+                    self?.updateStatus = .downloaded
+                    NSWorkspace.shared.open(destination)
+                }
+            } catch {
+                await MainActor.run {
+                    self?.updateStatus = .failed(error.localizedDescription)
+                    self?.appendLog("Update download failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     func quit() {
         stop()
         NSApplication.shared.terminate(nil)
+    }
+
+    private func applyLatestRelease(_ release: GitHubRelease) {
+        let version = release.tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+        latestUpdateURL = release.assets.first { $0.name.lowercased().hasSuffix(".dmg") }?.browserDownloadURL ??
+            release.htmlURL ??
+            Self.releasesURL
+        if Self.compareVersions(version, currentAppVersion) == .orderedDescending {
+            updateStatus = .available(version: version)
+        } else {
+            updateStatus = .current
+        }
+    }
+
+    private var currentAppVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+    }
+
+    private static func compareVersions(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        lhs.compare(rhs, options: .numeric)
     }
 
     private var effectiveCloudflaredPath: String {
@@ -504,10 +776,136 @@ final class TunnelBarViewModel: ObservableObject {
         appendLog(output)
         if let parsedURL = TunnelURLParser.parsePublicURL(from: output) {
             publicURL = PublicURLBuilder.build(baseURL: parsedURL, targetPath: activeTargetPaths.first ?? "/")
+            activeTunnelModes.insert(.dns)
             status = .running
-        } else if status == .starting && settings.mode == .dns {
+        } else if status == .starting {
+            activeTunnelModes.insert(.dns)
             status = .running
         }
+    }
+
+    private func handleQuickTunnelOutput(_ output: String, route: LocalProxyRoute) {
+        appendLog(output)
+        if let parsedURL = TunnelURLParser.parsePublicURL(from: output),
+           let routedURL = PublicURLBuilder.build(baseURL: parsedURL, targetPath: route.targetPath) {
+            quickPublicURLs[route] = routedURL
+            publicURL = quickPublicURLs.values.first
+            activeTunnelModes.insert(.quickURL)
+            status = .running
+        }
+    }
+
+    private func handleTunnelExit(mode: TunnelMode, statusCode: Int32) {
+        guard status != .stopped else { return }
+        activeTunnelModes.remove(mode)
+        if statusCode != 0 {
+            status = .error("cloudflared exited with status \(statusCode)")
+            return
+        }
+        if activeTunnelModes.isEmpty {
+            status = .stopped
+        }
+    }
+
+    private func handleQuickTunnelExit(route: LocalProxyRoute, statusCode: Int32) {
+        guard status != .stopped else { return }
+        if let index = quickSessions.firstIndex(where: { $0.route == route }) {
+            let session = quickSessions.remove(at: index)
+            session.proxy.stop()
+            try? FileManager.default.removeItem(at: session.configURL)
+        }
+        if quickSessions.isEmpty {
+            activeTunnelModes.remove(.quickURL)
+        }
+        if statusCode != 0 {
+            status = .error("cloudflared exited with status \(statusCode)")
+            return
+        }
+        if activeTunnelModes.isEmpty {
+            status = .stopped
+        }
+    }
+
+    private func startQuickRouteIfNeeded(_ route: LocalProxyRoute) {
+        guard status.isStarted else { return }
+        do {
+            try startQuickTunnel(normalizedRoute(route, wildcardHost: true))
+            status = .running
+        } catch {
+            status = .error(error.localizedDescription)
+            appendLog("Quick route start failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func stopQuickRouteSession(_ route: LocalProxyRoute) {
+        let normalized = normalizedRoute(route, wildcardHost: true)
+        quickPublicURLs[normalized] = nil
+        if let index = quickSessions.firstIndex(where: { $0.route == normalized }) {
+            let session = quickSessions.remove(at: index)
+            session.stop()
+        }
+        if quickSessions.isEmpty {
+            activeTunnelModes.remove(.quickURL)
+        }
+        publicURL = publicURLs.first
+        if status.isStarted && activeTunnelModes.isEmpty {
+            status = .stopped
+        }
+    }
+
+    private func refreshDNSTunnelIfNeeded() {
+        guard status.isStarted else { return }
+        stopDNSTunnelOnly()
+        guard canStartDNS else {
+            if activeTunnelModes.isEmpty {
+                status = .stopped
+            }
+            return
+        }
+        do {
+            try startDNSTunnel()
+            status = .running
+            publicURL = publicURLs.first
+        } catch {
+            status = .error(error.localizedDescription)
+            appendLog("DNS tunnel refresh failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func stopDNSTunnelOnly() {
+        tunnelProcess.stop()
+        proxy?.stop()
+        proxy = nil
+        proxyPort = nil
+        if let cloudflaredConfigURL {
+            try? FileManager.default.removeItem(at: cloudflaredConfigURL)
+            self.cloudflaredConfigURL = nil
+        }
+        activeTunnelModes.remove(.dns)
+    }
+
+    private var normalizedAuthHeaderName: String {
+        let trimmed = settings.authHeaderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "X-Routingflare-Secret" : trimmed
+    }
+
+    private var currentAuthHeader: ProxyAuthHeader {
+        Self.authHeader(
+            enabled: settings.authHeaderEnabled,
+            name: normalizedAuthHeaderName,
+            secret: authHeaderSecret
+        )
+    }
+
+    private static func authHeader(enabled: Bool, name: String, secret: String) -> ProxyAuthHeader {
+        ProxyAuthHeader(enabled: enabled, name: name, secret: secret)
+    }
+
+    private func updateAccessPolicy() {
+        accessPolicy.update(
+            allowlistEntries: settings.allowlistEntries,
+            authHeader: currentAuthHeader
+        )
     }
 
     private func addRecentPort(_ port: Int) {
@@ -515,11 +913,6 @@ final class TunnelBarViewModel: ObservableObject {
         settings.recentPorts.insert(port, at: 0)
         settings.recentPorts = Array(settings.recentPorts.prefix(6))
         saveSettings()
-    }
-
-    private func markRestartRequiredIfStarted() {
-        guard status.isStarted else { return }
-        requiresRestart = true
     }
 
     private func parsedPort(_ text: String) -> Int? {
@@ -530,10 +923,9 @@ final class TunnelBarViewModel: ObservableObject {
         return port
     }
 
-    private func writeQuickTunnelConfig() throws -> URL {
+    private func writeQuickSessionConfig() throws -> URL {
         let configURL = try temporaryCloudflaredConfigURL()
         try "".write(to: configURL, atomically: true, encoding: .utf8)
-        cloudflaredConfigURL = configURL
         appendLog("Using isolated empty cloudflared config for Quick URL mode")
         return configURL
     }
@@ -618,21 +1010,28 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     var publicURLs: [URL] {
-        switch settings.mode {
-        case .quickURL:
-            guard let publicURL,
-                  let base = URL(string: "\(publicURL.scheme ?? "https")://\(publicURL.host ?? publicURL.absoluteString)") else {
-                return []
+        let quickURLs: [URL] = activeQuickRoutes.compactMap { quickPublicURLs[$0] }
+        let dnsURLs: [URL] = activeDNSRoutes.compactMap { route in
+            guard let baseURL = URL(string: "https://\(route.hostname)") else {
+                return nil
             }
-            return activeQuickRoutes.compactMap { PublicURLBuilder.build(baseURL: base, targetPath: $0.targetPath) }
-        case .dns:
-            return activeDNSRoutes.compactMap { route in
-                guard let baseURL = URL(string: "https://\(route.hostname)") else {
-                    return nil
-                }
-                return PublicURLBuilder.build(baseURL: baseURL, targetPath: route.targetPath)
-            }
+            return PublicURLBuilder.build(baseURL: baseURL, targetPath: route.targetPath)
         }
+        return quickURLs + dnsURLs
+    }
+
+    func quickRouteFrom(_ route: LocalProxyRoute) -> String {
+        guard let url = quickPublicURLs[route], let host = url.host else {
+            if quickRouteIsPending(route) {
+                return "받아오는중 ..."
+            }
+            return "Quick URL\(route.targetPath == "/" ? "" : route.targetPath)"
+        }
+        return "\(host)\(url.path == "/" ? "" : url.path)"
+    }
+
+    func quickRouteIsPending(_ route: LocalProxyRoute) -> Bool {
+        quickPublicURLs[route] == nil && quickSessions.contains(where: { $0.route == route })
     }
 
     private func normalizeLists() {
@@ -703,29 +1102,49 @@ final class TunnelBarViewModel: ObservableObject {
 
 struct MenuContentView: View {
     @ObservedObject var model: TunnelBarViewModel
+    @State private var showsAbout = false
+    @State private var showsAuthSecret = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
-            actionControls
-            routingList
+            routesTable
             modeControls
-            if model.selectedTab == .quickURL {
-                quickRouteForm
-            } else if model.selectedTab == .dns {
-                dnsRouteForm
-                dnsControls
-            } else {
-                settingsControls
-            }
-            logsView
+            tabContent
             Divider()
-            Button("Quit TunnelBar", action: model.quit)
+            footerControls
         }
         .padding(16)
-        .frame(minHeight: 560, alignment: .top)
+        .frame(maxHeight: 1170, alignment: .top)
         .transaction { transaction in
             transaction.animation = nil
+        }
+    }
+
+    private var routesTable: some View {
+        RoutesTableView(
+            quickRoutes: model.activeQuickRoutes,
+            dnsRoutes: model.activeDNSRoutes,
+            runningModes: model.runningModes,
+            requiresRestart: model.requiresRestart,
+            quickRouteFrom: { model.quickRouteFrom($0) },
+            quickRouteIsPending: { model.quickRouteIsPending($0) },
+            removeQuickRoute: { model.removeQuickRoute($0) },
+            removeDNSRoute: { model.removeDNSRoute($0) }
+        )
+    }
+
+    @ViewBuilder
+    private var tabContent: some View {
+        if model.selectedTab == .quickURL {
+            quickRouteForm
+        } else if model.selectedTab == .dns {
+            dnsControls
+            dnsRouteForm
+        } else if model.selectedTab == .security {
+            securityControls
+        } else if model.selectedTab == .logs {
+            logsView
         }
     }
 
@@ -738,55 +1157,6 @@ struct MenuContentView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-    }
-
-    private var routingList: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Routes")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            ForEach(model.activeQuickRoutes, id: \.self) { route in
-                routeRow(
-                    title: "\(quickRoutePrefix)\(displayPath(route.targetPath))",
-                    port: route.targetPort,
-                    isActive: activeMode == .quickURL,
-                    remove: { model.removeQuickRoute(route) }
-                )
-            }
-
-            ForEach(model.activeDNSRoutes, id: \.self) { route in
-                routeRow(
-                    title: "\(route.hostname)\(displayPath(route.targetPath))",
-                    port: route.targetPort,
-                    isActive: activeMode == .dns,
-                    remove: { model.removeDNSRoute(route) }
-                )
-            }
-        }
-    }
-
-    private func routeRow(title: String, port: Int, isActive: Bool, remove: @escaping () -> Void) -> some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(isActive && !model.requiresRestart ? .green : .secondary)
-                .frame(width: 7, height: 7)
-            Text("\(title) -> 127.0.0.1:\(String(port))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .textSelection(.enabled)
-            Spacer()
-            Button(action: remove) {
-                Image(systemName: "minus.circle")
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    private var activeMode: TunnelMode? {
-        model.runningMode
     }
 
     private var quickRouteForm: some View {
@@ -812,13 +1182,6 @@ struct MenuContentView: View {
         }
     }
 
-    private var quickRoutePrefix: String {
-        guard let publicURL = model.publicURL, let host = publicURL.host else {
-            return "Quick URL"
-        }
-        return host
-    }
-
     private var modeControls: some View {
         Picker("", selection: $model.selectedTab) {
             ForEach(AppTab.allCases) { tab in
@@ -832,18 +1195,16 @@ struct MenuContentView: View {
 
     @ViewBuilder
     private var dnsControls: some View {
-        if model.settings.mode == .dns {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Tunnel")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                TextField("Tunnel ID, e.g. 24c83c3f-...", text: $model.settings.dnsTunnelID)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(model.saveSettings)
-                TextField("Credentials file, e.g. ~/.cloudflared/<id>.json", text: $model.settings.dnsCredentialsFile)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(model.saveSettings)
-            }
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Tunnel")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField("Tunnel ID, e.g. 24c83c3f-...", text: $model.settings.dnsTunnelID)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(model.saveSettings)
+            TextField("Credentials file, e.g. ~/.cloudflared/<id>.json", text: $model.settings.dnsCredentialsFile)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit(model.saveSettings)
         }
     }
 
@@ -867,12 +1228,9 @@ struct MenuContentView: View {
                     Image(systemName: "plus")
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(!model.canAddDNSRoute)
             }
         }
-    }
-
-    private func displayPath(_ path: String) -> String {
-        path == "/" ? "" : path
     }
 
     private func digitsOnly(_ value: String) -> String {
@@ -939,11 +1297,137 @@ struct MenuContentView: View {
         }
     }
 
-    private var settingsControls: some View {
+    private var securityControls: some View {
         VStack(alignment: .leading, spacing: 14) {
             allowlistControls
+            authHeaderControls
             installControls
         }
+    }
+
+    private var authHeaderControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Auth Header", isOn: $model.settings.authHeaderEnabled)
+                .onChange(of: model.settings.authHeaderEnabled) { _, _ in
+                    model.saveAuthHeaderSettings()
+                }
+            TextField("Header name", text: $model.settings.authHeaderName)
+                .textFieldStyle(.roundedBorder)
+                .disabled(!model.settings.authHeaderEnabled)
+                .onSubmit(model.saveAuthHeaderSettings)
+            HStack(spacing: 6) {
+                if showsAuthSecret {
+                    TextField("Secret", text: $model.authHeaderSecret)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(!model.settings.authHeaderEnabled)
+                        .onSubmit(model.saveAuthHeaderSettings)
+                } else {
+                    SecureField("Secret", text: $model.authHeaderSecret)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(!model.settings.authHeaderEnabled)
+                        .onSubmit(model.saveAuthHeaderSettings)
+                }
+                Button {
+                    showsAuthSecret.toggle()
+                } label: {
+                    Image(systemName: showsAuthSecret ? "eye.slash" : "eye")
+                }
+                .buttonStyle(.plain)
+                .disabled(!model.settings.authHeaderEnabled)
+                .help(showsAuthSecret ? "Hide secret" : "Show secret")
+            }
+            Button(action: model.saveAuthHeaderSettings) {
+                Label("Save Auth Header", systemImage: "key.fill")
+            }
+            .disabled(!model.settings.authHeaderEnabled)
+        }
+    }
+
+    private var footerControls: some View {
+        HStack(spacing: 10) {
+            Button {
+                if model.requiresRestart {
+                    model.restart()
+                } else if model.status.canStartTunnel {
+                    model.start()
+                } else {
+                    model.stop()
+                }
+            } label: {
+                Label(actionTitle, systemImage: actionIcon)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.status == .starting || (!model.canStart && (model.status.canStartTunnel || model.requiresRestart)))
+            Spacer()
+            Button {
+                showsAbout = true
+            } label: {
+                Label("About", systemImage: "info.circle")
+            }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showsAbout, arrowEdge: .bottom) {
+                aboutPopup
+            }
+            Button("Quit", action: model.quit)
+        }
+    }
+
+    private var aboutPopup: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("About")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            aboutRow("App", Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "routingflare")
+            aboutRow("Version", "\(appVersion) (\(appBuild))")
+            aboutRow("Creator", "Gyumin Hwangbo")
+            Button {
+                model.openProjectPage()
+            } label: {
+                Label("Project Page", systemImage: "safari")
+            }
+            .buttonStyle(.plain)
+            Divider()
+            HStack {
+                Button(action: model.checkForUpdates) {
+                    Label(model.updateStatus.label, systemImage: "arrow.down.circle")
+                }
+                .disabled(model.updateStatus == .checking || model.updateStatus == .downloading)
+                Button(action: model.installUpdate) {
+                    Label("Install Update", systemImage: "square.and.arrow.down")
+                }
+                .disabled(model.updateStatus == .checking || model.updateStatus == .downloading)
+            }
+            HStack {
+                Spacer()
+                Button("Close") {
+                    showsAbout = false
+                }
+            }
+        }
+        .padding(18)
+        .frame(width: 340)
+    }
+
+    private func aboutRow(_ title: String, _ value: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(width: 54, alignment: .leading)
+            Text(value)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Spacer()
+        }
+    }
+
+    private var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0"
+    }
+
+    private var appBuild: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "-"
     }
 
     @ViewBuilder
@@ -973,5 +1457,131 @@ struct MenuContentView: View {
             .background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
+    }
+}
+
+private struct RoutesTableView: View {
+    @State private var copiedValue: String?
+
+    let quickRoutes: [LocalProxyRoute]
+    let dnsRoutes: [LocalProxyRoute]
+    let runningModes: Set<TunnelMode>
+    let requiresRestart: Bool
+    let quickRouteFrom: (LocalProxyRoute) -> String
+    let quickRouteIsPending: (LocalProxyRoute) -> Bool
+    let removeQuickRoute: (LocalProxyRoute) -> Void
+    let removeDNSRoute: (LocalProxyRoute) -> Void
+
+    private let statusColumnWidth: CGFloat = 14
+    private let targetColumnWidth: CGFloat = 108
+    private let actionColumnWidth: CGFloat = 22
+    private let columnSpacing: CGFloat = 8
+    private let tableInset: CGFloat = 8
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            tableHeader
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(quickRoutes, id: \.self) { route in
+                        routeRow(
+                            from: quickRouteFrom(route),
+                            port: route.targetPort,
+                            isActive: runningModes.contains(.quickURL),
+                            isPending: quickRouteIsPending(route),
+                            remove: { removeQuickRoute(route) }
+                        )
+                    }
+
+                    ForEach(dnsRoutes, id: \.self) { route in
+                        routeRow(
+                            from: "\(route.hostname)\(displayPath(route.targetPath))",
+                            port: route.targetPort,
+                            isActive: runningModes.contains(.dns),
+                            isPending: false,
+                            remove: { removeDNSRoute(route) }
+                        )
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(height: 74)
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+    }
+
+    private var tableHeader: some View {
+        HStack(spacing: columnSpacing) {
+            Text("")
+                .frame(width: statusColumnWidth)
+            Text("From")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("To")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .frame(width: targetColumnWidth, alignment: .leading)
+            Text("")
+                .frame(width: actionColumnWidth)
+        }
+        .padding(.horizontal, tableInset)
+    }
+
+    private func routeRow(from: String, port: Int, isActive: Bool, isPending: Bool, remove: @escaping () -> Void) -> some View {
+        let target = "127.0.0.1:\(String(port))"
+        return HStack(spacing: columnSpacing) {
+            Circle()
+                .fill(routeDotColor(isActive: isActive, isPending: isPending))
+                .frame(width: 7, height: 7)
+                .frame(width: statusColumnWidth)
+            copyableText(from, width: nil, truncationMode: .middle)
+            copyableText(target, width: targetColumnWidth, truncationMode: .tail)
+            Button(action: remove) {
+                Image(systemName: "minus.circle")
+            }
+            .buttonStyle(.plain)
+            .frame(width: actionColumnWidth, height: 22)
+        }
+        .frame(height: 37)
+        .padding(.horizontal, tableInset)
+    }
+
+    private func copyableText(_ value: String, width: CGFloat?, truncationMode: Text.TruncationMode) -> some View {
+        let isCopied = copiedValue == value
+        return Text(isCopied ? "Copied" : value)
+            .font(.caption)
+            .foregroundStyle(isCopied ? .secondary : .secondary)
+            .lineLimit(1)
+            .truncationMode(truncationMode)
+            .frame(width: width, alignment: .leading)
+            .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                copy(value)
+            }
+    }
+
+    private func copy(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+        copiedValue = value
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            if copiedValue == value {
+                copiedValue = nil
+            }
+        }
+    }
+
+    private func routeDotColor(isActive: Bool, isPending: Bool) -> Color {
+        if isPending {
+            return .orange
+        }
+        return isActive && !requiresRestart ? .green : .secondary
+    }
+
+    private func displayPath(_ path: String) -> String {
+        path == "/" ? "" : path
     }
 }

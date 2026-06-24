@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="${APP_NAME:-라우팅플레어}"
+APP_NAME="${APP_NAME:-routingflare}"
 PRODUCT_NAME="${PRODUCT_NAME:-TunnelBar}"
 EXECUTABLE_NAME="${EXECUTABLE_NAME:-TunnelBar}"
-DISPLAY_NAME="${DISPLAY_NAME:-라우팅플레어}"
+DISPLAY_NAME="${DISPLAY_NAME:-routingflare}"
 BUNDLE_ID="${BUNDLE_ID:-dev.local.tunnelbar}"
 VERSION="${VERSION:-1.0.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"

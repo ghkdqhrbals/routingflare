@@ -1,0 +1,221 @@
+name: Build Release DMG and Pages
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, for example 1.0.0"
+        required: true
+        type: string
+      build_number:
+        description: "CFBundleVersion build number"
+        required: false
+        type: string
+      release_notes:
+        description: "Release notes"
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: release-pages
+  cancel-in-progress: false
+
+env:
+  APP_NAME: routingflare
+  PRODUCT_NAME: TunnelBar
+  EXECUTABLE_NAME: TunnelBar
+  DISPLAY_NAME: routingflare
+  BUNDLE_ID: com.gyuminhwangbo.RoutingFlare
+
+jobs:
+  release:
+    runs-on: macos-15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${{ inputs.version }}"
+          fi
+          BUILD_NUMBER="${{ inputs.build_number }}"
+          if [[ -z "$BUILD_NUMBER" ]]; then
+            BUILD_NUMBER="${GITHUB_RUN_NUMBER}"
+          fi
+          TAG="v${VERSION}"
+          DMG_NAME="${APP_NAME}-${VERSION}.dmg"
+          DMG_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${DMG_NAME}"
+          {
+            echo "version=${VERSION}"
+            echo "build_number=${BUILD_NUMBER}"
+            echo "tag=${TAG}"
+            echo "dmg_name=${DMG_NAME}"
+            echo "dmg_url=${DMG_URL}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate signing inputs
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in \
+            CERTIFICATE_BASE64 \
+            CERTIFICATE_PASSWORD \
+            KEYCHAIN_PASSWORD \
+            CODESIGN_IDENTITY \
+            APPLE_NOTARY_KEY_BASE64 \
+            APPLE_NOTARY_KEY_ID \
+            APPLE_NOTARY_ISSUER_ID
+          do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing required secret-backed value: $name" >&2
+              exit 1
+            fi
+          done
+
+      - name: Import Developer ID certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/routingflare-signing.keychain-db"
+          CERTIFICATE_PATH="$RUNNER_TEMP/developer-id.p12"
+          echo "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+      - name: Prepare notarization key
+        env:
+          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "$APPLE_NOTARY_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
+
+      - name: Test
+        run: swift test --scratch-path .build
+
+      - name: Build app
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+          BUILD_NUMBER: ${{ steps.vars.outputs.build_number }}
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+        run: scripts/build-app.sh
+
+      - name: Package DMG
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+        run: scripts/package-dmg.sh
+
+      - name: Notarize DMG
+        env:
+          VERSION: ${{ steps.vars.outputs.version }}
+          NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          NOTARY_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
+        run: scripts/notarize-dmg.sh
+
+      - name: Verify signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          codesign --verify --deep --strict --verbose=2 "dist/${APP_NAME}.app"
+          codesign --verify --verbose=2 "dist/${{ steps.vars.outputs.dmg_name }}"
+          xcrun stapler validate "dist/${{ steps.vars.outputs.dmg_name }}"
+          spctl --assess --type open --context context:primary-signature --verbose "dist/${{ steps.vars.outputs.dmg_name }}"
+
+      - name: Generate release metadata for Pages
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG_PATH="dist/${{ steps.vars.outputs.dmg_name }}"
+          SHA256="$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')"
+          PUBLISHED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          cat > docs/release.json <<JSON
+          {
+            "version": "${{ steps.vars.outputs.version }}",
+            "dmg_name": "${{ steps.vars.outputs.dmg_name }}",
+            "dmg_url": "${{ steps.vars.outputs.dmg_url }}",
+            "sha256": "$SHA256",
+            "published_at": "$PUBLISHED_AT"
+          }
+          JSON
+          {
+            echo "sha256=${SHA256}"
+            echo "published_at=${PUBLISHED_AT}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          VERSION: ${{ steps.vars.outputs.version }}
+          SHA256: ${{ steps.metadata.outputs.sha256 }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+          {
+            echo "routingflare ${VERSION}"
+            echo
+            if [[ -n "${RELEASE_NOTES:-}" ]]; then
+              echo "$RELEASE_NOTES"
+              echo
+            fi
+            echo "- DMG: ${{ steps.vars.outputs.dmg_name }}"
+            echo "- SHA256: ${SHA256}"
+            echo "- GitHub Pages: https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/"
+          } > "$NOTES_FILE"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "dist/${{ steps.vars.outputs.dmg_name }}" --clobber
+            gh release edit "$TAG" --title "routingflare ${VERSION}" --notes-file "$NOTES_FILE"
+          else
+            gh release create "$TAG" "dist/${{ steps.vars.outputs.dmg_name }}" --title "routingflare ${VERSION}" --notes-file "$NOTES_FILE"
+          fi
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

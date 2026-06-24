@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="${APP_NAME:-RoutingFlare}"
+APP_NAME="${APP_NAME:-routingflare}"
 VERSION="${VERSION:-1.0.0}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DMG_PATH="${DMG_PATH:-$ROOT_DIR/dist/$APP_NAME-$VERSION.dmg}"
