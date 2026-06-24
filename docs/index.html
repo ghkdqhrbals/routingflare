@@ -5,29 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="routingflare opens a public URL from your local development server through Cloudflare Tunnel."
+      content="routingflare opens a public URL from your local development server with Cloudflare Tunnel."
     />
     <title>routingflare</title>
     <style>
       :root {
         color-scheme: light;
-        --ink: #111514;
-        --muted: #68716d;
-        --line: #e1e7e4;
-        --bg: #f6f8f7;
-        --surface: #ffffff;
-        --soft: #eef2f0;
-        --blue: #1268f3;
-        --green: #26c967;
-        --shadow: 0 24px 70px rgba(18, 25, 22, 0.12);
+        --bg: #f7f8f6;
+        --ink: #151817;
+        --muted: #69716d;
+        --line: #dfe5e1;
+        --panel: #ffffff;
+        --blue: #1769ff;
+        --green: #29cf67;
       }
 
       * {
         box-sizing: border-box;
-      }
-
-      html {
-        scroll-behavior: smooth;
       }
 
       body {
@@ -42,39 +36,22 @@
       }
 
       .wrap {
-        width: min(1120px, calc(100% - 40px));
+        width: min(980px, calc(100% - 36px));
         margin: 0 auto;
       }
 
-      .nav {
-        position: sticky;
-        top: 0;
-        z-index: 20;
-        border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
-        background: color-mix(in srgb, var(--bg) 88%, transparent);
-        backdrop-filter: blur(18px);
-      }
-
-      .nav-inner {
-        height: 66px;
+      header {
+        padding: 28px 0;
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 20px;
-      }
-
-      .brand,
-      .nav-links,
-      .actions,
-      .meta,
-      .mode-head,
-      .status {
-        display: flex;
-        align-items: center;
+        gap: 16px;
       }
 
       .brand {
-        gap: 12px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
         font-weight: 800;
         text-decoration: none;
       }
@@ -85,393 +62,216 @@
         border-radius: 8px;
       }
 
-      .nav-links {
-        gap: 18px;
+      .links {
+        display: flex;
+        align-items: center;
+        gap: 14px;
         color: var(--muted);
         font-size: 14px;
       }
 
-      .nav-links a {
+      .links a {
         text-decoration: none;
       }
 
-      .button {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        min-height: 42px;
-        padding: 0 16px;
-        border-radius: 9px;
-        border: 1px solid transparent;
-        background: var(--ink);
-        color: #ffffff;
-        text-decoration: none;
-        font-weight: 760;
-      }
-
-      .button.secondary {
-        background: var(--surface);
-        border-color: var(--line);
-        color: var(--ink);
-      }
-
-      .button.kofi {
-        padding: 0;
-        border: 0;
-        background: transparent;
-      }
-
-      .button.kofi img {
-        display: block;
-        height: 36px;
-        border: 0;
+      main {
+        padding: 48px 0 64px;
       }
 
       .hero {
-        padding: 84px 0 72px;
-      }
-
-      .hero-grid {
         display: grid;
-        grid-template-columns: 0.9fr 1.1fr;
-        gap: 56px;
+        grid-template-columns: 0.85fr 1.15fr;
+        gap: 42px;
         align-items: center;
       }
 
       h1,
-      h2,
-      h3,
       p {
         margin: 0;
       }
 
       h1 {
-        max-width: 660px;
-        font-size: clamp(54px, 8vw, 104px);
-        line-height: 0.92;
+        font-size: clamp(48px, 8vw, 86px);
+        line-height: 0.96;
         letter-spacing: 0;
       }
 
-      .hero-copy {
-        max-width: 570px;
-        margin-top: 24px;
+      .copy {
+        margin-top: 20px;
         color: var(--muted);
         font-size: 20px;
-        line-height: 1.58;
+        line-height: 1.55;
       }
 
       .actions {
+        display: flex;
         flex-wrap: wrap;
+        align-items: center;
         gap: 12px;
-        margin-top: 32px;
+        margin-top: 28px;
+      }
+
+      .button {
+        display: inline-flex;
+        min-height: 42px;
+        align-items: center;
+        justify-content: center;
+        padding: 0 16px;
+        border-radius: 8px;
+        background: var(--ink);
+        color: #fff;
+        font-weight: 760;
+        text-decoration: none;
+      }
+
+      .button.secondary {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        color: var(--ink);
       }
 
       .meta {
-        flex-wrap: wrap;
-        gap: 14px;
-        margin-top: 18px;
+        margin-top: 14px;
         color: var(--muted);
-        font-size: 14px;
+        font-size: 13px;
       }
 
-      .hero-shot {
+      .shot {
         overflow: hidden;
-        border: 1px solid #262b29;
-        border-radius: 18px;
-        background: #0c0d0d;
-        box-shadow: var(--shadow);
+        border: 1px solid #2c302e;
+        border-radius: 14px;
+        background: #111;
+        box-shadow: 0 24px 60px rgba(24, 30, 27, 0.15);
       }
 
-      .hero-shot img,
       .shot img {
         display: block;
         width: 100%;
       }
 
-      .section {
-        padding: 72px 0;
-      }
-
-      .section-head {
-        max-width: 720px;
-        margin-bottom: 28px;
-      }
-
-      h2 {
-        font-size: clamp(34px, 5vw, 58px);
-        line-height: 1;
-        letter-spacing: 0;
-      }
-
-      .section-head p {
-        margin-top: 14px;
-        color: var(--muted);
-        font-size: 18px;
-        line-height: 1.58;
-      }
-
-      .modes {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 16px;
-      }
-
-      .mode,
-      .feature,
-      .release-panel {
-        background: var(--surface);
-        border: 1px solid var(--line);
-        border-radius: 14px;
-      }
-
-      .mode {
-        padding: 24px;
-      }
-
-      .mode-head {
-        justify-content: space-between;
-        gap: 16px;
-      }
-
-      .mode h3 {
-        font-size: 24px;
-      }
-
-      .pill {
-        padding: 6px 10px;
-        border-radius: 999px;
-        background: var(--soft);
-        color: var(--muted);
-        font-size: 13px;
-        font-weight: 700;
-      }
-
-      .mode p,
-      .feature p,
-      .release-panel p {
-        margin-top: 12px;
-        color: var(--muted);
-        font-size: 17px;
-        line-height: 1.58;
-      }
-
-      .screens {
+      .points {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
-        gap: 16px;
+        gap: 12px;
+        margin-top: 42px;
       }
 
-      .shot {
-        overflow: hidden;
+      .point {
+        padding: 18px;
         border: 1px solid var(--line);
-        border-radius: 14px;
-        background: #0c0d0d;
-        box-shadow: 0 18px 44px rgba(20, 28, 25, 0.1);
+        border-radius: 12px;
+        background: var(--panel);
       }
 
-      .features {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 14px;
-      }
-
-      .feature {
-        padding: 20px;
-      }
-
-      .feature strong {
+      .point strong {
         display: block;
         font-size: 17px;
       }
 
-      .release-panel {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 20px;
-        align-items: center;
-        padding: 24px;
+      .point span {
+        display: block;
+        margin-top: 8px;
+        color: var(--muted);
+        line-height: 1.45;
       }
 
       .status {
+        display: inline-flex;
+        align-items: center;
         gap: 8px;
-        margin-top: 14px;
-        color: var(--muted);
-        font-size: 14px;
       }
 
       .dot {
-        width: 9px;
-        height: 9px;
+        width: 8px;
+        height: 8px;
         border-radius: 50%;
         background: var(--green);
       }
 
-      code {
-        padding: 2px 6px;
-        border-radius: 6px;
-        background: var(--soft);
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      }
-
       footer {
-        padding: 34px 0 54px;
-        border-top: 1px solid var(--line);
+        padding: 26px 0 36px;
         color: var(--muted);
-        font-size: 14px;
+        font-size: 13px;
       }
 
-      @media (max-width: 900px) {
-        .hero-grid,
-        .modes,
-        .screens,
-        .features,
-        .release-panel {
+      @media (max-width: 820px) {
+        header,
+        .hero,
+        .points {
           grid-template-columns: 1fr;
         }
 
-        .nav-links a:not(.button) {
-          display: none;
+        header {
+          display: grid;
         }
       }
     </style>
   </head>
   <body>
-    <nav class="nav">
-      <div class="wrap nav-inner">
-        <a class="brand" href="#">
+    <div class="wrap">
+      <header>
+        <a class="brand" href="./">
           <img src="assets/routingflare-icon.png" alt="" />
           <span>routingflare</span>
         </a>
-        <div class="nav-links">
-          <a href="#modes">Modes</a>
-          <a href="#screens">Screens</a>
-          <a href="#release">Release</a>
-          <a class="button" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">Download</a>
-        </div>
-      </div>
-    </nav>
+        <nav class="links" aria-label="Project links">
+          <a href="https://github.com/ghkdqhrbals/routingflare">GitHub</a>
+          <a href="https://github.com/ghkdqhrbals/routingflare/releases/latest">Releases</a>
+          <a href="https://ko-fi.com/gyumin">Ko-fi</a>
+        </nav>
+      </header>
 
-    <main>
-      <section class="hero">
-        <div class="wrap hero-grid">
+      <main>
+        <section class="hero">
           <div>
-            <h1>Open localhost to the public, fast.</h1>
-            <p class="hero-copy">
-              A simple macOS menu bar app for sharing local development ports through Cloudflare Tunnel.
+            <h1>Open your local server to the web.</h1>
+            <p class="copy">
+              A small macOS menu bar app for opening public URLs from local dev ports with Cloudflare Tunnel.
             </p>
             <div class="actions">
-              <a class="button" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">Download DMG</a>
-              <a class="button secondary" href="https://github.com/ghkdqhrbals/routingflare">GitHub</a>
-              <a class="button kofi" href="https://ko-fi.com/D8X421KF0U" target="_blank" rel="noopener">
-                <img height="36" style="border:0;height:36px;" src="https://storage.ko-fi.com/cdn/kofi6.png?v=6" border="0" alt="Buy Me a Coffee at ko-fi.com" />
-              </a>
+              <a class="button" id="download" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">Download DMG</a>
+              <a class="button secondary" href="https://github.com/ghkdqhrbals/routingflare">View source</a>
             </div>
-            <div class="meta">
-              <span>Latest: <strong id="latest-version">release page</strong></span>
-              <span>DMG: <a id="dmg-link" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">latest release</a></span>
-            </div>
+            <p class="meta">
+              <span class="status"><span class="dot"></span><span id="version">Latest release</span></span>
+            </p>
           </div>
-          <div class="hero-shot">
-            <img src="assets/routingflare-security.png" alt="routingflare menu bar app with routes, security, and stop controls" />
-          </div>
-        </div>
-      </section>
 
-      <section id="modes" class="section">
-        <div class="wrap">
-          <div class="section-head">
-            <h2>Two ways to open a route.</h2>
+          <div class="shot">
+            <img src="assets/routingflare-security.png" alt="routingflare menu bar app screenshot" />
           </div>
-          <div class="modes">
-            <div class="mode">
-              <div class="mode-head">
-                <h3>Quick URL</h3>
-                <span class="pill">fast random DNS</span>
-              </div>
-              <p>Generate a temporary <code>trycloudflare.com</code> URL and point it at a local port.</p>
-            </div>
-            <div class="mode">
-              <div class="mode-head">
-                <h3>DNS</h3>
-                <span class="pill">your domain</span>
-              </div>
-              <p>Connect your own hostname to a local port with an existing Cloudflare Tunnel.</p>
-            </div>
-          </div>
-        </div>
-      </section>
+        </section>
 
-      <section id="screens" class="section">
-        <div class="wrap">
-          <div class="section-head">
-            <h2>Small toolbar. Clear routes.</h2>
+        <section class="points" aria-label="Features">
+          <div class="point">
+            <strong>Quick URL</strong>
+            <span>Get a temporary trycloudflare.com address for any local port.</span>
           </div>
-          <div class="screens">
-            <div class="shot">
-              <img src="assets/routingflare-quick-url.png" alt="routingflare Quick URL route screen" />
-            </div>
-            <div class="shot">
-              <img src="assets/routingflare-dns.png" alt="routingflare DNS route screen" />
-            </div>
-            <div class="shot">
-              <img src="assets/routingflare-security.png" alt="routingflare Security screen" />
-            </div>
+          <div class="point">
+            <strong>DNS routes</strong>
+            <span>Connect your own hostname through an existing Cloudflare tunnel config.</span>
           </div>
-        </div>
-      </section>
+          <div class="point">
+            <strong>Security</strong>
+            <span>Restrict inbound IPs and optionally require a secret auth header.</span>
+          </div>
+        </section>
+      </main>
 
-      <section class="section">
-        <div class="wrap">
-          <div class="features">
-            <div class="feature">
-              <strong>Routes</strong>
-              <p>Public address to local port.</p>
-            </div>
-            <div class="feature">
-              <strong>Security</strong>
-              <p>IP allowlist and auth header.</p>
-            </div>
-            <div class="feature">
-              <strong>Logs</strong>
-              <p>Tunnel and proxy events.</p>
-            </div>
-            <div class="feature">
-              <strong>Updates</strong>
-              <p>Check and install latest DMG.</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section id="release" class="section">
-        <div class="wrap release-panel">
-          <div>
-            <h2>Public DMG.</h2>
-            <p>Signed app, GitHub Release, latest download link.</p>
-            <div class="status"><span class="dot"></span><span id="release-status">Release metadata loads from docs/release.json.</span></div>
-          </div>
-          <a class="button" id="release-download" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">Download latest DMG</a>
-        </div>
-      </section>
-    </main>
-
-    <footer class="wrap">
-      routingflare
-    </footer>
+      <footer>
+        Built by Gyumin Hwangbo. macOS 14 or later.
+      </footer>
+    </div>
 
     <script>
-      fetch("release.json", { cache: "no-store" })
+      fetch("./release.json", { cache: "no-store" })
         .then((response) => (response.ok ? response.json() : null))
         .then((release) => {
           if (!release) return;
-          const version = release.version || "latest";
-          const dmgUrl = release.dmg_url || "https://github.com/ghkdqhrbals/routingflare/releases/latest";
-          document.getElementById("latest-version").textContent = version;
-          document.getElementById("dmg-link").href = dmgUrl;
-          document.getElementById("dmg-link").textContent = release.dmg_name || "DMG";
-          document.getElementById("release-download").href = dmgUrl;
-          document.getElementById("release-status").textContent =
-            `Version ${version} published${release.sha256 ? `, SHA256 ${release.sha256.slice(0, 12)}...` : ""}.`;
+          const version = document.getElementById("version");
+          const download = document.getElementById("download");
+          if (release.version) version.textContent = `Version ${release.version}`;
+          if (release.dmg_url) download.href = release.dmg_url;
         })
         .catch(() => {});
     </script>
