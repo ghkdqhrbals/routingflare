@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="RoutingFlare exposes local development ports through Cloudflare Tunnel from a simple macOS menu bar app." />
+    <title>RoutingFlare</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #14211f;
+        --muted: #5c6a65;
+        --line: #dce5e1;
+        --panel: #f7faf9;
+        --bg: #eef4f1;
+        --dark: #101719;
+        --cyan: #37d2d7;
+        --orange: #ff9a3c;
+        --green: #28c876;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: var(--ink);
+        background: var(--bg);
+      }
+
+      a {
+        color: inherit;
+      }
+
+      .nav {
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        backdrop-filter: blur(18px);
+        background: color-mix(in srgb, var(--bg) 86%, transparent);
+        border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+      }
+
+      .nav-inner,
+      .section,
+      .hero-inner {
+        width: min(1120px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      .nav-inner {
+        height: 68px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-weight: 800;
+      }
+
+      .brand img {
+        width: 36px;
+        height: 36px;
+        border-radius: 9px;
+      }
+
+      .nav-links {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 42px;
+        padding: 0 16px;
+        border-radius: 9px;
+        background: var(--ink);
+        color: white;
+        text-decoration: none;
+        font-weight: 750;
+      }
+
+      .hero {
+        position: relative;
+        min-height: 690px;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at 76% 18%, color-mix(in srgb, var(--cyan) 28%, transparent), transparent 28%),
+          radial-gradient(circle at 92% 8%, color-mix(in srgb, var(--orange) 24%, transparent), transparent 22%),
+          linear-gradient(135deg, #0f1719 0%, #1c2927 100%);
+        color: white;
+      }
+
+      .hero-inner {
+        display: grid;
+        grid-template-columns: 0.86fr 1.14fr;
+        gap: 54px;
+        align-items: center;
+        padding: 78px 0 88px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(48px, 8vw, 92px);
+        line-height: 0.92;
+        letter-spacing: 0;
+      }
+
+      .hero p {
+        max-width: 560px;
+        margin: 26px 0 0;
+        color: #c9d7d2;
+        font-size: 19px;
+        line-height: 1.62;
+      }
+
+      .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 34px;
+      }
+
+      .button.secondary {
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.22);
+      }
+
+      .hero-card {
+        border-radius: 24px;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        box-shadow: 0 28px 70px rgba(0, 0, 0, 0.42);
+      }
+
+      .hero-card img {
+        display: block;
+        width: 100%;
+      }
+
+      .section {
+        padding: 88px 0;
+      }
+
+      .section-head {
+        max-width: 760px;
+        margin-bottom: 36px;
+      }
+
+      h2 {
+        margin: 0;
+        font-size: clamp(32px, 4vw, 52px);
+        line-height: 1.02;
+        letter-spacing: 0;
+      }
+
+      .section-head p,
+      .feature p,
+      .workflow p {
+        color: var(--muted);
+        line-height: 1.62;
+        font-size: 17px;
+      }
+
+      .features {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+      }
+
+      .feature {
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 22px;
+      }
+
+      .feature strong {
+        display: block;
+        font-size: 18px;
+        margin-bottom: 8px;
+      }
+
+      .screens {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 18px;
+      }
+
+      .screen {
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        padding: 12px;
+        box-shadow: 0 18px 40px rgba(30, 40, 37, 0.08);
+      }
+
+      .screen img {
+        display: block;
+        width: 100%;
+        border-radius: 12px;
+      }
+
+      .workflow {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 14px;
+      }
+
+      .workflow div {
+        min-height: 160px;
+        background: #ffffff;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 20px;
+      }
+
+      .workflow span {
+        display: inline-grid;
+        place-items: center;
+        width: 30px;
+        height: 30px;
+        margin-bottom: 18px;
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--cyan) 20%, white);
+        color: #087c81;
+        font-weight: 800;
+      }
+
+      footer {
+        padding: 34px 0 54px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+      }
+
+      @media (max-width: 860px) {
+        .hero-inner,
+        .screens,
+        .features,
+        .workflow {
+          grid-template-columns: 1fr;
+        }
+
+        .nav-links a:not(.button) {
+          display: none;
+        }
+
+        .hero {
+          min-height: auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <nav class="nav">
+      <div class="nav-inner">
+        <a class="brand" href="#">
+          <img src="assets/routingflare-icon.png" alt="" />
+          <span>RoutingFlare</span>
+        </a>
+        <div class="nav-links">
+          <a href="#features">Features</a>
+          <a href="#screens">Screenshots</a>
+          <a href="#workflow">Workflow</a>
+          <a class="button" href="https://github.com/gyuminhwangbo/routingflare/releases">Download</a>
+        </div>
+      </div>
+    </nav>
+
+    <main>
+      <section class="hero">
+        <div class="hero-inner">
+          <div>
+            <h1>RoutingFlare</h1>
+            <p>
+              A macOS menu bar app for opening local development ports through Cloudflare Tunnel.
+              Add Quick URL or DNS routes, control inbound IP access, and keep your local server workflow fast.
+            </p>
+            <div class="hero-actions">
+              <a class="button" href="https://github.com/gyuminhwangbo/routingflare/releases">Download DMG</a>
+              <a class="button secondary" href="#screens">View setup</a>
+            </div>
+          </div>
+          <div class="hero-card">
+            <img src="assets/quick-screenshot.svg" alt="RoutingFlare Quick URL setup screenshot" />
+          </div>
+        </div>
+      </section>
+
+      <section id="features" class="section">
+        <div class="section-head">
+          <h2>Expose local ports without leaving the menu bar.</h2>
+          <p>RoutingFlare wraps cloudflared with a small local proxy, so each route can map a public path to a local port.</p>
+        </div>
+        <div class="features">
+          <div class="feature">
+            <strong>Quick URL routes</strong>
+            <p>Create temporary trycloudflare.com routes for local testing without a Cloudflare login.</p>
+          </div>
+          <div class="feature">
+            <strong>DNS routes</strong>
+            <p>Use an existing named Cloudflare Tunnel to map hostnames and paths to local ports.</p>
+          </div>
+          <div class="feature">
+            <strong>Inbound IP allowlist</strong>
+            <p>Restrict access with exact IPs or CIDR ranges through the built-in local filtering proxy.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="screens" class="section">
+        <div class="section-head">
+          <h2>Built around route visibility.</h2>
+          <p>The route list stays at the top. Quick URL, DNS, and Settings tabs only change what you add or configure next.</p>
+        </div>
+        <div class="screens">
+          <div class="screen">
+            <img src="assets/quick-screenshot.svg" alt="Quick URL route setup showing port and path fields" />
+          </div>
+          <div class="screen">
+            <img src="assets/dns-settings-screenshot.svg" alt="DNS and Settings setup showing hostname, port, path, and inbound IP allowlist" />
+          </div>
+        </div>
+      </section>
+
+      <section id="workflow" class="section">
+        <div class="section-head">
+          <h2>Simple local dev flow.</h2>
+        </div>
+        <div class="workflow">
+          <div>
+            <span>1</span>
+            <strong>Run your dev server</strong>
+            <p>Start a local app on a port like 3000, 8080, or 8989.</p>
+          </div>
+          <div>
+            <span>2</span>
+            <strong>Add a route</strong>
+            <p>Enter port and path for Quick URL, or hostname, port, and path for DNS.</p>
+          </div>
+          <div>
+            <span>3</span>
+            <strong>Start RoutingFlare</strong>
+            <p>RoutingFlare starts a local proxy and opens the Cloudflare Tunnel.</p>
+          </div>
+          <div>
+            <span>4</span>
+            <strong>Share safely</strong>
+            <p>Use the Settings tab to manage inbound IP allowlist entries.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="section" style="padding: 0;">
+        RoutingFlare is built for local development testing with Cloudflare Tunnel.
+      </div>
+    </footer>
+  </body>
+</html>
