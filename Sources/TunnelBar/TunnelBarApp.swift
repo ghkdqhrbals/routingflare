@@ -819,8 +819,9 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func handleTunnelOutput(_ output: String) {
+        let issue = cloudflaredIssue(from: output, previousLog: logs.last)
         appendLog(output)
-        if let issue = cloudflaredIssue(from: output) {
+        if let issue {
             dnsCloudflaredIssue = issue
             activeTunnelModes.remove(.dns)
             if activeTunnelModes.subtracting([.dns]).isEmpty {
@@ -1155,18 +1156,37 @@ final class TunnelBarViewModel: ObservableObject {
         }
     }
 
-    private func cloudflaredIssue(from output: String) -> String? {
-        output
+    private func cloudflaredIssue(from output: String, previousLog: String?) -> String? {
+        let lines = output
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first(where: { $0.contains(" ERR ") || $0.hasSuffix(" ERR") })
-            .map { line in
-                if let range = line.range(of: " ERR ") {
-                    let message = String(line[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-                    return "cloudflared: \(message)"
-                }
-                return "cloudflared: \(line)"
+            .filter { !$0.isEmpty }
+        guard let errorIndex = lines.firstIndex(where: { $0.contains(" ERR ") || $0.hasSuffix(" ERR") }) else {
+            return nil
+        }
+
+        let errorLine = lines[errorIndex]
+        let previousLine: String? = {
+            if errorIndex > lines.startIndex {
+                return lines[lines.index(before: errorIndex)]
             }
+            return previousLog?
+                .components(separatedBy: .newlines)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .last { !$0.isEmpty }
+        }()
+
+        let message: String
+        if let range = errorLine.range(of: " ERR ") {
+            message = String(errorLine[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            message = errorLine
+        }
+
+        if let previousLine, previousLine != errorLine {
+            return "cloudflared: \(previousLine)\ncloudflared: \(message)"
+        }
+        return "cloudflared: \(message)"
     }
 }
 
@@ -1834,10 +1854,13 @@ private final class HoverTooltipPresenter {
     }
 
     private func show(text: String) {
-        let hostingView = NSHostingView(rootView: TooltipBubble(text: text))
+        let measuredView = NSHostingView(rootView: TooltipBubble(text: text, width: nil))
+        let measuredSize = measuredView.fittingSize
+        let width = min(max(measuredSize.width, 44), 340)
+        let hostingView = NSHostingView(rootView: TooltipBubble(text: text, width: width))
         let fittingSize = hostingView.fittingSize
         let size = NSSize(
-            width: min(max(fittingSize.width, 120), 340),
+            width: min(max(fittingSize.width, 44), 340),
             height: min(max(fittingSize.height, 32), 220)
         )
         hostingView.frame = NSRect(origin: .zero, size: size)
@@ -1873,6 +1896,7 @@ private final class HoverTooltipPresenter {
 
 private struct TooltipBubble: View {
     let text: String
+    let width: CGFloat?
 
     var body: some View {
         Text(text)
@@ -1882,7 +1906,7 @@ private struct TooltipBubble: View {
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .frame(width: 320, alignment: .leading)
+            .frame(width: width, alignment: .leading)
             .background(Color(nsColor: .windowBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay(
