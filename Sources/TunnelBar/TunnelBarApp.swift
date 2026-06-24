@@ -73,6 +73,14 @@ enum TunnelStatus: Equatable {
     }
 }
 
+private struct TunnelStartError: LocalizedError {
+    let message: String
+
+    var errorDescription: String? {
+        message
+    }
+}
+
 enum AppTab: String, CaseIterable, Identifiable {
     case quickURL
     case dns
@@ -161,9 +169,9 @@ private final class QuickTunnelSession {
     let route: LocalProxyRoute
     let proxy: LocalFilteringProxy
     let process: TunnelProcess
-    let configURL: URL
+    let configURL: URL?
 
-    init(route: LocalProxyRoute, proxy: LocalFilteringProxy, process: TunnelProcess, configURL: URL) {
+    init(route: LocalProxyRoute, proxy: LocalFilteringProxy, process: TunnelProcess, configURL: URL? = nil) {
         self.route = route
         self.proxy = proxy
         self.process = process
@@ -173,7 +181,9 @@ private final class QuickTunnelSession {
     func stop() {
         process.stop()
         proxy.stop()
-        try? FileManager.default.removeItem(at: configURL)
+        if let configURL {
+            try? FileManager.default.removeItem(at: configURL)
+        }
     }
 }
 
@@ -282,6 +292,28 @@ final class TunnelBarViewModel: ObservableObject {
         !settings.dnsCredentialsFile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    var dnsUnavailableReason: String? {
+        guard !activeDNSRoutes.isEmpty else {
+            return nil
+        }
+        let missing = dnsMissingSettings
+        guard !missing.isEmpty else {
+            return nil
+        }
+        return "Missing \(missing.joined(separator: " and "))"
+    }
+
+    private var dnsMissingSettings: [String] {
+        var missing: [String] = []
+        if settings.dnsTunnelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            missing.append("tunnel ID")
+        }
+        if settings.dnsCredentialsFile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            missing.append("credentials file")
+        }
+        return missing
+    }
+
     var canAddDNSRoute: Bool {
         parsedPort(newDNSPortText) != nil &&
         !newDNSHostname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
@@ -382,9 +414,14 @@ final class TunnelBarViewModel: ObservableObject {
             if canStartDNS {
                 try startDNSTunnel()
                 startedAnyTunnel = true
+            } else if let dnsUnavailableReason {
+                appendLog("DNS routes not started: \(dnsUnavailableReason)")
             }
 
             guard startedAnyTunnel else {
+                if let dnsUnavailableReason {
+                    throw TunnelStartError(message: "DNS routes not started: \(dnsUnavailableReason)")
+                }
                 throw LocalFilteringProxyError.listenerNotReady
             }
 
@@ -469,14 +506,12 @@ final class TunnelBarViewModel: ObservableObject {
             }
         )
         let proxyPort = try proxy.start()
-        let configURL = try writeQuickSessionConfig()
         let command = TunnelCommandBuilder.quickURL(
             cloudflaredPath: effectiveCloudflaredPath,
-            proxyPort: proxyPort,
-            configPath: configURL.path
+            proxyPort: proxyPort
         )
         let process = TunnelProcess()
-        let session = QuickTunnelSession(route: route, proxy: proxy, process: process, configURL: configURL)
+        let session = QuickTunnelSession(route: route, proxy: proxy, process: process)
         quickSessions.append(session)
 
         appendLog("Exposing quick route \(route.targetPath) -> 127.0.0.1:\(String(route.targetPort)) through proxy 127.0.0.1:\(String(proxyPort))")
@@ -818,7 +853,9 @@ final class TunnelBarViewModel: ObservableObject {
         if let index = quickSessions.firstIndex(where: { $0.route == route }) {
             let session = quickSessions.remove(at: index)
             session.proxy.stop()
-            try? FileManager.default.removeItem(at: session.configURL)
+            if let configURL = session.configURL {
+                try? FileManager.default.removeItem(at: configURL)
+            }
         }
         if quickSessions.isEmpty {
             activeTunnelModes.remove(.quickURL)
@@ -927,13 +964,6 @@ final class TunnelBarViewModel: ObservableObject {
             return nil
         }
         return port
-    }
-
-    private func writeQuickSessionConfig() throws -> URL {
-        let configURL = try temporaryCloudflaredConfigURL()
-        try "".write(to: configURL, atomically: true, encoding: .utf8)
-        appendLog("Using isolated empty cloudflared config for Quick URL mode")
-        return configURL
     }
 
     private func writeDNSConfig(proxyPort: Int) throws -> URL {
@@ -1133,6 +1163,7 @@ struct MenuContentView: View {
             dnsRoutes: model.activeDNSRoutes,
             runningModes: model.runningModes,
             requiresRestart: model.requiresRestart,
+            dnsUnavailableReason: model.dnsUnavailableReason,
             quickRouteFrom: { model.quickRouteFrom($0) },
             quickRouteIsPending: { model.quickRouteIsPending($0) },
             removeQuickRoute: { model.removeQuickRoute($0) },
@@ -1560,6 +1591,7 @@ private struct RoutesTableView: View {
     let dnsRoutes: [LocalProxyRoute]
     let runningModes: Set<TunnelMode>
     let requiresRestart: Bool
+    let dnsUnavailableReason: String?
     let quickRouteFrom: (LocalProxyRoute) -> String
     let quickRouteIsPending: (LocalProxyRoute) -> Bool
     let removeQuickRoute: (LocalProxyRoute) -> Void
@@ -1582,6 +1614,7 @@ private struct RoutesTableView: View {
                             port: route.targetPort,
                             isActive: runningModes.contains(.quickURL),
                             isPending: quickRouteIsPending(route),
+                            statusText: nil,
                             remove: { removeQuickRoute(route) }
                         )
                     }
@@ -1592,13 +1625,14 @@ private struct RoutesTableView: View {
                             port: route.targetPort,
                             isActive: runningModes.contains(.dns),
                             isPending: false,
+                            statusText: runningModes.contains(.dns) ? nil : dnsUnavailableReason,
                             remove: { removeDNSRoute(route) }
                         )
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(height: 74)
+            .frame(height: 86)
             .background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 6))
         }
@@ -1622,14 +1656,31 @@ private struct RoutesTableView: View {
         .padding(.horizontal, tableInset)
     }
 
-    private func routeRow(from: String, port: Int, isActive: Bool, isPending: Bool, remove: @escaping () -> Void) -> some View {
+    private func routeRow(
+        from: String,
+        port: Int,
+        isActive: Bool,
+        isPending: Bool,
+        statusText: String?,
+        remove: @escaping () -> Void
+    ) -> some View {
         let target = "127.0.0.1:\(String(port))"
         return HStack(spacing: columnSpacing) {
             Circle()
                 .fill(routeDotColor(isActive: isActive, isPending: isPending))
                 .frame(width: 7, height: 7)
                 .frame(width: statusColumnWidth)
-            copyableText(from, width: nil, truncationMode: .middle)
+            VStack(alignment: .leading, spacing: 2) {
+                copyableText(from, width: nil, truncationMode: .middle)
+                if let statusText {
+                    Text(statusText)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             copyableText(target, width: targetColumnWidth, truncationMode: .tail)
             Button(action: remove) {
                 Image(systemName: "minus.circle")
@@ -1637,7 +1688,7 @@ private struct RoutesTableView: View {
             .buttonStyle(.plain)
             .frame(width: actionColumnWidth, height: 22)
         }
-        .frame(height: 37)
+        .frame(height: 43)
         .padding(.horizontal, tableInset)
     }
 

@@ -5,15 +5,12 @@ final class TunnelCommandTests: XCTestCase {
     func testQuickUrlCommandExposesProxyPort() {
         let command = TunnelCommandBuilder.quickURL(
             cloudflaredPath: "/usr/local/bin/cloudflared",
-            proxyPort: 61422,
-            configPath: "/tmp/tunnelbar-empty.yml"
+            proxyPort: 61422
         )
 
         XCTAssertEqual(command.executable, "/usr/local/bin/cloudflared")
         XCTAssertEqual(command.arguments, [
             "tunnel",
-            "--config",
-            "/tmp/tunnelbar-empty.yml",
             "--url",
             "http://127.0.0.1:61422"
         ])

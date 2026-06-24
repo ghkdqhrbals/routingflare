@@ -11,13 +11,11 @@ public struct TunnelCommand: Equatable {
 }
 
 public enum TunnelCommandBuilder {
-    public static func quickURL(cloudflaredPath: String, proxyPort: Int, configPath: String) -> TunnelCommand {
+    public static func quickURL(cloudflaredPath: String, proxyPort: Int) -> TunnelCommand {
         TunnelCommand(
             executable: cloudflaredPath,
             arguments: [
                 "tunnel",
-                "--config",
-                configPath,
                 "--url",
                 "http://127.0.0.1:\(proxyPort)"
             ]
