@@ -1620,9 +1620,6 @@ struct MenuContentView: View {
 
 private struct RoutesTableView: View {
     @State private var copiedValue: String?
-    @State private var tooltipText: String?
-    @State private var tooltipPosition: CGPoint = .zero
-    @State private var tooltipWorkItem: DispatchWorkItem?
 
     let quickRoutes: [LocalProxyRoute]
     let dnsRoutes: [LocalProxyRoute]
@@ -1641,49 +1638,38 @@ private struct RoutesTableView: View {
     private let tableInset: CGFloat = 8
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            VStack(alignment: .leading, spacing: 8) {
-                tableHeader
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(quickRoutes, id: \.self) { route in
-                            routeRow(
-                                from: quickRouteFrom(route),
-                                port: route.targetPort,
-                                isActive: runningModes.contains(.quickURL),
-                                isPending: quickRouteIsPending(route),
-                                statusText: nil,
-                                remove: { removeQuickRoute(route) }
-                            )
-                        }
-
-                        ForEach(dnsRoutes, id: \.self) { route in
-                            routeRow(
-                                from: "\(route.hostname)\(displayPath(route.targetPath))",
-                                port: route.targetPort,
-                                isActive: runningModes.contains(.dns),
-                                isPending: dnsUnavailableReason != nil,
-                                statusText: runningModes.contains(.dns) ? nil : dnsUnavailableReason,
-                                remove: { removeDNSRoute(route) }
-                            )
-                        }
+        VStack(alignment: .leading, spacing: 8) {
+            tableHeader
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(quickRoutes, id: \.self) { route in
+                        routeRow(
+                            from: quickRouteFrom(route),
+                            port: route.targetPort,
+                            isActive: runningModes.contains(.quickURL),
+                            isPending: quickRouteIsPending(route),
+                            statusText: nil,
+                            remove: { removeQuickRoute(route) }
+                        )
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(height: 86)
-                .background(Color(nsColor: .textBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-            }
 
-            if let tooltipText {
-                TooltipBubble(text: tooltipText)
-                    .fixedSize()
-                    .position(x: tooltipPosition.x + 170, y: tooltipPosition.y + 46)
-                    .allowsHitTesting(false)
-                    .zIndex(10)
+                    ForEach(dnsRoutes, id: \.self) { route in
+                        routeRow(
+                            from: "\(route.hostname)\(displayPath(route.targetPath))",
+                            port: route.targetPort,
+                            isActive: runningModes.contains(.dns),
+                            isPending: dnsUnavailableReason != nil,
+                            statusText: runningModes.contains(.dns) ? nil : dnsUnavailableReason,
+                            remove: { removeDNSRoute(route) }
+                        )
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(height: 86)
+            .background(Color(nsColor: .textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
         }
-        .coordinateSpace(name: "routesTableTooltip")
         .onDisappear {
             hideTooltip()
         }
@@ -1780,36 +1766,20 @@ private struct RoutesTableView: View {
                 }
             }
             .onHover { hovering in
-                if !hovering {
-                    hideTooltip()
-                }
-            }
-            .onContinuousHover(coordinateSpace: .named("routesTableTooltip")) { phase in
-                switch phase {
-                case .active(let location):
-                    scheduleTooltip(text: value, at: location)
-                case .ended:
+                if hovering {
+                    scheduleTooltip(text: value)
+                } else {
                     hideTooltip()
                 }
             }
     }
 
-    private func scheduleTooltip(text: String, at location: CGPoint) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        tooltipPosition = location
-        tooltipWorkItem?.cancel()
-        let item = DispatchWorkItem {
-            tooltipText = trimmed
-        }
-        tooltipWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: item)
+    private func scheduleTooltip(text: String) {
+        HoverTooltipPresenter.shared.schedule(text: text)
     }
 
     private func hideTooltip() {
-        tooltipWorkItem?.cancel()
-        tooltipWorkItem = nil
-        tooltipText = nil
+        HoverTooltipPresenter.shared.hide()
     }
 
     private func copy(_ value: String) {
@@ -1835,6 +1805,72 @@ private struct RoutesTableView: View {
     }
 }
 
+@MainActor
+private final class HoverTooltipPresenter {
+    static let shared = HoverTooltipPresenter()
+
+    private var pendingWorkItem: DispatchWorkItem?
+    private var panel: NSPanel?
+
+    func schedule(text: String) {
+        hide()
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let item = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                self?.show(text: trimmed)
+            }
+        }
+        pendingWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: item)
+    }
+
+    func hide() {
+        pendingWorkItem?.cancel()
+        pendingWorkItem = nil
+        panel?.orderOut(nil)
+        panel = nil
+    }
+
+    private func show(text: String) {
+        let hostingView = NSHostingView(rootView: TooltipBubble(text: text))
+        let fittingSize = hostingView.fittingSize
+        let size = NSSize(
+            width: min(max(fittingSize.width, 120), 340),
+            height: min(max(fittingSize.height, 32), 220)
+        )
+        hostingView.frame = NSRect(origin: .zero, size: size)
+
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: size),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.contentView = hostingView
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.ignoresMouseEvents = true
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
+        panel.level = .popUpMenu
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+
+        let mouse = NSEvent.mouseLocation
+        let visibleFrame = NSScreen.screens.first(where: { $0.frame.contains(mouse) })?.visibleFrame
+            ?? NSScreen.main?.visibleFrame
+            ?? .zero
+        var origin = NSPoint(x: mouse.x + 14, y: mouse.y - size.height - 12)
+        origin.x = min(max(origin.x, visibleFrame.minX + 4), visibleFrame.maxX - size.width - 4)
+        origin.y = min(max(origin.y, visibleFrame.minY + 4), visibleFrame.maxY - size.height - 4)
+        panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        panel.orderFrontRegardless()
+        self.panel = panel
+    }
+}
+
 private struct TooltipBubble: View {
     let text: String
 
@@ -1847,7 +1883,7 @@ private struct TooltipBubble: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .frame(width: 320, alignment: .leading)
-            .background(.regularMaterial)
+            .background(Color(nsColor: .windowBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
