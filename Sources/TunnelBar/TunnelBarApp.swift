@@ -200,7 +200,9 @@ final class TunnelBarViewModel: ObservableObject {
     @Published var newAllowlistEntry = ""
     @Published var newDNSHostname = ""
     @Published var newDNSPortText = "3000"
+    @Published var newDNSPathText = ""
     @Published var newQuickPortText = "3000"
+    @Published var newQuickPathText = ""
     @Published var newTargetPath = ""
     @Published var installInProgress = false
     @Published var automaticInstallAttempted = false
@@ -408,9 +410,9 @@ final class TunnelBarViewModel: ObservableObject {
         requiresRestart = false
         status = .starting
         activeTunnelModes = []
+        var startedAnyTunnel = false
 
         do {
-            var startedAnyTunnel = false
             if !activeQuickRoutes.isEmpty {
                 try startQuickTunnels()
                 startedAnyTunnel = true
@@ -431,14 +433,18 @@ final class TunnelBarViewModel: ObservableObject {
             }
 
             status = .running
-            if let firstURL = quickPublicURLs.values.first {
+            if let firstURL = publicURLs.first {
                 publicURL = firstURL
             }
             addRecentPort(activeTargetPort)
         } catch {
-            stop()
-            status = .error(error.localizedDescription)
             appendLog("Start failed: \(error.localizedDescription)")
+            if startedAnyTunnel, !quickSessions.isEmpty {
+                applyDNSFailure(error.localizedDescription)
+            } else {
+                stop()
+                status = .error(error.localizedDescription)
+            }
         }
     }
 
@@ -483,6 +489,7 @@ final class TunnelBarViewModel: ObservableObject {
                 }
             )
 
+            activeTunnelModes.insert(.dns)
     }
 
     private func startQuickTunnels() throws {
@@ -604,7 +611,7 @@ final class TunnelBarViewModel: ObservableObject {
 
     func addDNSRoute() {
         let hostname = newDNSHostname.trimmingCharacters(in: .whitespacesAndNewlines)
-        var path = newTargetPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        var path = newDNSPathText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canAddDNSRoute, let port = parsedPort(newDNSPortText), !hostname.isEmpty else { return }
         if path.isEmpty {
             path = "/"
@@ -619,7 +626,7 @@ final class TunnelBarViewModel: ObservableObject {
             didAdd = true
         }
         newDNSHostname = ""
-        newTargetPath = ""
+        newDNSPathText = ""
         saveSettings()
         if didAdd {
             refreshDNSTunnelIfNeeded()
@@ -627,7 +634,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     func addQuickRoute() {
-        var path = newTargetPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        var path = newQuickPathText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let port = parsedPort(newQuickPortText) else { return }
         if path.isEmpty {
             path = "/"
@@ -641,7 +648,7 @@ final class TunnelBarViewModel: ObservableObject {
             settings.quickRoutes.insert(route, at: 0)
             didAdd = true
         }
-        newTargetPath = ""
+        newQuickPathText = ""
         saveSettings()
         if didAdd {
             startQuickRouteIfNeeded(route)
@@ -824,9 +831,7 @@ final class TunnelBarViewModel: ObservableObject {
         if let issue {
             dnsCloudflaredIssue = issue
             activeTunnelModes.remove(.dns)
-            if activeTunnelModes.subtracting([.dns]).isEmpty {
-                status = .error(issue)
-            }
+            applyDNSFailure(issue)
             return
         }
         if let parsedURL = TunnelURLParser.parsePublicURL(from: output) {
@@ -857,7 +862,7 @@ final class TunnelBarViewModel: ObservableObject {
         if statusCode != 0 {
             let issue = dnsCloudflaredIssue ?? "cloudflared exited with status \(statusCode)"
             dnsCloudflaredIssue = issue
-            status = .error(issue)
+            applyDNSFailure(issue)
             return
         }
         dnsCloudflaredIssue = nil
@@ -926,10 +931,21 @@ final class TunnelBarViewModel: ObservableObject {
         do {
             try startDNSTunnel()
             status = .running
-            publicURL = quickPublicURLs.values.first
+            publicURL = publicURLs.first
         } catch {
-            status = .error(error.localizedDescription)
             appendLog("DNS tunnel refresh failed: \(error.localizedDescription)")
+            applyDNSFailure(error.localizedDescription)
+        }
+    }
+
+    private func applyDNSFailure(_ issue: String) {
+        dnsCloudflaredIssue = issue
+        activeTunnelModes.remove(.dns)
+        if activeTunnelModes.contains(.quickURL) || !quickSessions.isEmpty {
+            status = .running
+            publicURL = quickPublicURLs.values.first
+        } else {
+            status = .error(issue)
         }
     }
 
@@ -1262,7 +1278,7 @@ struct MenuContentView: View {
                     .onChange(of: model.newQuickPortText) { _, value in
                         model.newQuickPortText = digitsOnly(value)
                     }
-                TextField("/console", text: $model.newTargetPath)
+                TextField("/console", text: $model.newQuickPathText)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit(model.addQuickRoute)
                 Button(action: model.addQuickRoute) {
@@ -1313,7 +1329,7 @@ struct MenuContentView: View {
                     .onChange(of: model.newDNSPortText) { _, value in
                         model.newDNSPortText = digitsOnly(value)
                     }
-                TextField("/console", text: $model.newTargetPath)
+                TextField("/console", text: $model.newDNSPathText)
                     .textFieldStyle(.roundedBorder)
                 Button(action: model.addDNSRoute) {
                     Image(systemName: "plus")
