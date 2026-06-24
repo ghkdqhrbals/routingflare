@@ -6,6 +6,10 @@ public final class TunnelProcess {
 
     public init() {}
 
+    deinit {
+        stop()
+    }
+
     public var isRunning: Bool {
         process?.isRunning ?? false
     }

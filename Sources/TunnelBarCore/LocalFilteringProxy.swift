@@ -48,6 +48,10 @@ public final class LocalFilteringProxy {
         self.logHandler = logHandler
     }
 
+    deinit {
+        stop()
+    }
+
     public func start() throws -> Int {
         let parameters = NWParameters.tcp
         if let loopback = IPv4Address("127.0.0.1") {

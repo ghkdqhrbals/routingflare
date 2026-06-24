@@ -6,6 +6,10 @@ import TunnelBarCore
 struct TunnelBarApp: App {
     @StateObject private var model = TunnelBarViewModel()
 
+    init() {
+        RoutingFlareSingleInstance.terminateExistingInstances()
+    }
+
     var body: some Scene {
         MenuBarExtra {
             MenuContentView(model: model)
@@ -121,6 +125,7 @@ enum UpdateStatus: Equatable {
     case current
     case failed(String)
     case downloading
+    case installing
     case downloaded
 
     var label: String {
@@ -137,8 +142,32 @@ enum UpdateStatus: Equatable {
             return "Check failed"
         case .downloading:
             return "Downloading..."
+        case .installing:
+            return "Installing..."
         case .downloaded:
             return "Downloaded"
+        }
+    }
+}
+
+private enum RoutingFlareSingleInstance {
+    static func terminateExistingInstances() {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else {
+            return
+        }
+
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        let existingApplications = NSRunningApplication
+            .runningApplications(withBundleIdentifier: bundleIdentifier)
+            .filter { $0.processIdentifier != currentPID }
+
+        for application in existingApplications {
+            application.terminate()
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1.5) {
+                if !application.isTerminated {
+                    application.forceTerminate()
+                }
+            }
         }
     }
 }
@@ -176,6 +205,10 @@ private final class QuickTunnelSession {
         self.proxy = proxy
         self.process = process
         self.configURL = configURL
+    }
+
+    deinit {
+        stop()
     }
 
     func stop() {
@@ -738,7 +771,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     func checkForUpdates() {
-        guard updateStatus != .checking && updateStatus != .downloading else { return }
+        guard updateStatus != .checking && updateStatus != .downloading && updateStatus != .installing else { return }
         updateStatus = .checking
 
         Task { [weak self] in
@@ -762,7 +795,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     func installUpdate() {
-        guard updateStatus != .downloading else { return }
+        guard updateStatus != .downloading && updateStatus != .installing else { return }
         let url = latestUpdateURL ?? Self.releasesURL
         guard url.pathExtension.lowercased() == "dmg" else {
             NSWorkspace.shared.open(url)
@@ -773,16 +806,21 @@ final class TunnelBarViewModel: ObservableObject {
         Task { [weak self] in
             do {
                 let (temporaryURL, _) = try await URLSession.shared.download(from: url)
-                let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first ??
-                    FileManager.default.homeDirectoryForCurrentUser
-                let destination = downloads.appendingPathComponent(url.lastPathComponent)
+                let updatesDirectory = try Self.applicationSupportDirectory()
+                    .appendingPathComponent("Updates", isDirectory: true)
+                try FileManager.default.createDirectory(at: updatesDirectory, withIntermediateDirectories: true)
+                let destination = updatesDirectory.appendingPathComponent(url.lastPathComponent)
                 if FileManager.default.fileExists(atPath: destination.path) {
                     try FileManager.default.removeItem(at: destination)
                 }
                 try FileManager.default.moveItem(at: temporaryURL, to: destination)
                 await MainActor.run {
-                    self?.updateStatus = .downloaded
-                    NSWorkspace.shared.open(destination)
+                    do {
+                        try self?.installAndRestart(from: destination)
+                    } catch {
+                        self?.updateStatus = .failed(error.localizedDescription)
+                        self?.appendLog("Update install failed: \(error.localizedDescription)")
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -791,6 +829,67 @@ final class TunnelBarViewModel: ObservableObject {
                 }
             }
         }
+    }
+
+    private func installAndRestart(from dmgURL: URL) throws {
+        updateStatus = .installing
+        appendLog("Installing update from \(dmgURL.path)")
+
+        let helperURL = try Self.applicationSupportDirectory()
+            .appendingPathComponent("routingflare-update-\(UUID().uuidString).zsh")
+        let currentAppURL = Bundle.main.bundleURL
+        let script = """
+        #!/bin/zsh
+        set -euo pipefail
+
+        DMG_PATH="$1"
+        DEST_APP="$2"
+        OLD_PID="$3"
+        APP_NAME="$4"
+        LOG_PATH="$5"
+        MOUNT_DIR="$(mktemp -d /tmp/routingflare-update.XXXXXX)"
+
+        {
+          echo "Mounting $DMG_PATH"
+          hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT_DIR" "$DMG_PATH"
+          SRC_APP="$MOUNT_DIR/$APP_NAME.app"
+          if [[ ! -d "$SRC_APP" ]]; then
+            SRC_APP="$(find "$MOUNT_DIR" -maxdepth 1 -name '*.app' -type d | head -n 1)"
+          fi
+          if [[ -z "$SRC_APP" || ! -d "$SRC_APP" ]]; then
+            echo "No app bundle found in DMG"
+            exit 1
+          fi
+
+          while kill -0 "$OLD_PID" 2>/dev/null; do
+            sleep 0.2
+          done
+
+          echo "Replacing $DEST_APP"
+          rm -rf "$DEST_APP"
+          ditto "$SRC_APP" "$DEST_APP"
+          xattr -dr com.apple.quarantine "$DEST_APP" 2>/dev/null || true
+          hdiutil detach "$MOUNT_DIR"
+          open "$DEST_APP"
+          echo "Update installed"
+        } >> "$LOG_PATH" 2>&1
+        """
+        try script.write(to: helperURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helperURL.path)
+
+        let logURL = try Self.applicationSupportDirectory().appendingPathComponent("update.log")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = [
+            helperURL.path,
+            dmgURL.path,
+            currentAppURL.path,
+            String(ProcessInfo.processInfo.processIdentifier),
+            currentAppURL.deletingPathExtension().lastPathComponent,
+            logURL.path
+        ]
+        try process.run()
+        quit()
     }
 
     func quit() {
@@ -812,6 +911,17 @@ final class TunnelBarViewModel: ObservableObject {
 
     private var currentAppVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+    }
+
+    private static func applicationSupportDirectory() throws -> URL {
+        let supportDirectory = try FileManager.default.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ).appendingPathComponent("TunnelBar", isDirectory: true)
+        try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
+        return supportDirectory
     }
 
     private static func compareVersions(_ lhs: String, _ rhs: String) -> ComparisonResult {
@@ -1017,13 +1127,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func temporaryCloudflaredConfigURL() throws -> URL {
-        let supportDirectory = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        ).appendingPathComponent("TunnelBar", isDirectory: true)
-        try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
+        let supportDirectory = try Self.applicationSupportDirectory()
         return supportDirectory.appendingPathComponent("cloudflared-\(UUID().uuidString).yml")
     }
 
@@ -1542,7 +1646,7 @@ struct MenuContentView: View {
                     Button(action: model.installUpdate) {
                         Label("Install and Update", systemImage: "square.and.arrow.down")
                     }
-                    .disabled(model.updateStatus == .checking || model.updateStatus == .downloading)
+                    .disabled(model.updateStatus == .checking || model.updateStatus == .downloading || model.updateStatus == .installing)
                 }
             }
             HStack {
@@ -1597,7 +1701,7 @@ struct MenuContentView: View {
                 Text(model.updateStatus == .checking ? "Checking..." : "Check")
                     .font(.caption.weight(.semibold))
             }
-            .disabled(model.updateStatus == .checking || model.updateStatus == .downloading)
+            .disabled(model.updateStatus == .checking || model.updateStatus == .downloading || model.updateStatus == .installing)
         }
     }
 
@@ -1629,6 +1733,8 @@ struct MenuContentView: View {
             return "Update check failed. Current version: \(appVersion). \(message)"
         case .downloading:
             return "Downloading update. Current version: \(appVersion)."
+        case .installing:
+            return "Installing update. routingflare will restart automatically."
         case .downloaded:
             return "Update downloaded. Open the DMG to install."
         }
@@ -1638,7 +1744,7 @@ struct MenuContentView: View {
         switch model.updateStatus {
         case .available, .downloaded:
             return true
-        case .idle, .checking, .current, .failed, .downloading:
+        case .idle, .checking, .current, .failed, .downloading, .installing:
             return false
         }
     }

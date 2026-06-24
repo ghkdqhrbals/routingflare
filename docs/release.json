@@ -1,7 +1,7 @@
 {
-  "version": "1.0.1",
-  "dmg_name": "routingflare-1.0.1.dmg",
-  "dmg_url": "https://github.com/ghkdqhrbals/routingflare/releases/download/v1.0.1/routingflare-1.0.1.dmg",
-  "sha256": "1e6775c4cba794d552dc68ff22eacbd390847955413822159c8c536bf93aec76",
-  "published_at": "2026-06-24T19:04:00Z"
+  "version": "1.0.2",
+  "dmg_name": "routingflare-1.0.2.dmg",
+  "dmg_url": "https://github.com/ghkdqhrbals/routingflare/releases/download/v1.0.2/routingflare-1.0.2.dmg",
+  "sha256": "19dee63e0d451ec46c166bc169fa81c45cef81c886b4f5a7eaee7228a0cb3309",
+  "published_at": "2026-06-24T19:18:01Z"
 }
