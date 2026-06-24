@@ -5,13 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="routingflare opens a public URL from your local development server with Cloudflare Tunnel."
+      content="routingflare opens public URLs from localhost in seconds with Cloudflare Tunnel."
     />
+    <meta property="og:title" content="routingflare" />
+    <meta
+      property="og:description"
+      content="A tiny macOS menu bar app for Quick URL and DNS routes with Cloudflare Tunnel."
+    />
+    <meta property="og:image" content="https://ghkdqhrbals.github.io/routingflare/assets/routingflare-quick-url.png" />
+    <meta property="og:type" content="website" />
     <title>routingflare</title>
     <style>
       :root {
         color-scheme: light;
-        --bg: #f7f8f6;
+        --bg: #f6f8fb;
         --ink: #151817;
         --muted: #69716d;
         --line: #dfe5e1;
@@ -36,7 +43,7 @@
       }
 
       .wrap {
-        width: min(980px, calc(100% - 36px));
+        width: min(1040px, calc(100% - 36px));
         margin: 0 auto;
       }
 
@@ -75,14 +82,11 @@
       }
 
       main {
-        padding: 48px 0 64px;
+        padding: 34px 0 64px;
       }
 
       .hero {
-        display: grid;
-        grid-template-columns: 0.85fr 1.15fr;
-        gap: 42px;
-        align-items: center;
+        text-align: center;
       }
 
       h1,
@@ -91,12 +95,17 @@
       }
 
       h1 {
-        font-size: clamp(48px, 8vw, 86px);
-        line-height: 0.96;
+        max-width: 850px;
+        margin: 0 auto;
+        font-size: clamp(48px, 7vw, 82px);
+        line-height: 0.98;
         letter-spacing: 0;
       }
 
       .copy {
+        max-width: 720px;
+        margin-left: auto;
+        margin-right: auto;
         margin-top: 20px;
         color: var(--muted);
         font-size: 20px;
@@ -107,6 +116,7 @@
         display: flex;
         flex-wrap: wrap;
         align-items: center;
+        justify-content: center;
         gap: 12px;
         margin-top: 28px;
       }
@@ -137,6 +147,8 @@
       }
 
       .shot {
+        width: min(780px, 100%);
+        margin: 40px auto 0;
         overflow: hidden;
         border: 1px solid #2c302e;
         border-radius: 14px;
@@ -153,7 +165,7 @@
         display: grid;
         grid-template-columns: repeat(3, 1fr);
         gap: 12px;
-        margin-top: 42px;
+        margin-top: 44px;
       }
 
       .point {
@@ -196,7 +208,6 @@
 
       @media (max-width: 820px) {
         header,
-        .hero,
         .points {
           grid-template-columns: 1fr;
         }
@@ -224,9 +235,9 @@
       <main>
         <section class="hero">
           <div>
-            <h1>Open your local server to the web.</h1>
+            <h1>Open public URLs from localhost in seconds.</h1>
             <p class="copy">
-              A small macOS menu bar app for opening public URLs from local dev ports with Cloudflare Tunnel.
+              A tiny macOS menu bar app for Cloudflare Tunnel. Quick URL for instant random domains, DNS routes for your own hostname.
             </p>
             <div class="actions">
               <a class="button" id="download" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">Download DMG</a>
@@ -236,9 +247,8 @@
               <span class="status"><span class="dot"></span><span id="version">Latest release</span></span>
             </p>
           </div>
-
           <div class="shot">
-            <img src="assets/routingflare-security.png" alt="routingflare menu bar app screenshot" />
+            <img src="assets/routingflare-quick-url.png" alt="routingflare Quick URL screenshot" />
           </div>
         </section>
 

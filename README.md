@@ -1,23 +1,26 @@
 # routingflare
 
-A small macOS menu bar app for opening public URLs from local development ports with Cloudflare Tunnel.
+Open public URLs from localhost in seconds.
+
+routingflare is a tiny macOS menu bar app for Cloudflare Tunnel. Use Quick URL for an instant random `trycloudflare.com` address, or DNS routes for your own hostname.
 
 [Download DMG](https://github.com/ghkdqhrbals/routingflare/releases/latest) · [Project page](https://ghkdqhrbals.github.io/routingflare/)
 
-![routingflare security tab](docs/assets/routingflare-security.png)
+![routingflare Quick URL](docs/assets/routingflare-quick-url.png)
+
+## Features
+
+- Quick URL: expose a local port with a temporary public URL.
+- DNS: connect your own hostname to a local port and path.
+- Security: inbound IP allowlist and optional auth header.
+- Logs: Cloudflare Tunnel and local proxy events.
+- Updates: check, install, and restart from the app.
 
 ## Screenshots
 
-![Quick URL](docs/assets/routingflare-quick-url.png)
-
 ![DNS routes](docs/assets/routingflare-dns.png)
 
-## What It Does
-
-- Quick URL: temporary `trycloudflare.com` routes for local ports.
-- DNS routes: connect your own hostname through an existing Cloudflare tunnel.
-- Security: inbound IP allowlist and optional auth header.
-- Logs: Cloudflare Tunnel and local proxy events.
+![Security](docs/assets/routingflare-security.png)
 
 ## Development
 
