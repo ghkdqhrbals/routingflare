@@ -860,7 +860,9 @@ final class TunnelBarViewModel: ObservableObject {
         guard status != .stopped else { return }
         activeTunnelModes.remove(mode)
         if statusCode != 0 {
-            let issue = dnsCloudflaredIssue ?? "cloudflared exited with status \(statusCode)"
+            let exitIssue = "cloudflared exited with status \(statusCode)"
+            let cloudflaredError = dnsCloudflaredIssue ?? recentCloudflaredIssueFromLogs()
+            let issue = combinedCloudflaredIssue(error: cloudflaredError, exitIssue: exitIssue)
             dnsCloudflaredIssue = issue
             applyDNSFailure(issue)
             return
@@ -1177,7 +1179,7 @@ final class TunnelBarViewModel: ObservableObject {
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-        guard let errorIndex = lines.firstIndex(where: { $0.contains(" ERR ") || $0.hasSuffix(" ERR") }) else {
+        guard let errorIndex = lines.firstIndex(where: isCloudflaredErrorLine) else {
             return nil
         }
 
@@ -1192,17 +1194,56 @@ final class TunnelBarViewModel: ObservableObject {
                 .last { !$0.isEmpty }
         }()
 
-        let message: String
-        if let range = errorLine.range(of: " ERR ") {
-            message = String(errorLine[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-        } else {
-            message = errorLine
-        }
+        let message = cloudflaredErrorMessage(from: errorLine)
 
         if let previousLine, previousLine != errorLine {
             return "cloudflared: \(previousLine)\ncloudflared: \(message)"
         }
         return "cloudflared: \(message)"
+    }
+
+    private func recentCloudflaredIssueFromLogs() -> String? {
+        let lines = logs
+            .flatMap { $0.components(separatedBy: .newlines) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.contains("cloudflared exited with status") }
+
+        guard let errorIndex = lines.lastIndex(where: isCloudflaredErrorLine) else {
+            return nil
+        }
+
+        let errorLine = lines[errorIndex]
+        let previousLine = errorIndex > lines.startIndex ? lines[lines.index(before: errorIndex)] : nil
+        let message = cloudflaredErrorMessage(from: errorLine)
+
+        if let previousLine, previousLine != errorLine {
+            return "cloudflared: \(previousLine)\ncloudflared: \(message)"
+        }
+        return "cloudflared: \(message)"
+    }
+
+    private func combinedCloudflaredIssue(error: String?, exitIssue: String) -> String {
+        guard let error, !error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return exitIssue
+        }
+        return error.contains(exitIssue) ? error : "\(error)\n\(exitIssue)"
+    }
+
+    private func isCloudflaredErrorLine(_ line: String) -> Bool {
+        line.contains(" ERR ") || line.hasSuffix(" ERR") || line.contains(" ERR\t") || line.contains(" ERR:")
+    }
+
+    private func cloudflaredErrorMessage(from errorLine: String) -> String {
+        if let range = errorLine.range(of: " ERR ") {
+            return String(errorLine[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let range = errorLine.range(of: " ERR\t") {
+            return String(errorLine[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let range = errorLine.range(of: " ERR:") {
+            return String(errorLine[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return errorLine
     }
 }
 
