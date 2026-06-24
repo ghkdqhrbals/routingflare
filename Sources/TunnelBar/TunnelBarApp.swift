@@ -50,7 +50,7 @@ enum TunnelStatus: Equatable {
         case .blockedRequest:
             return "globe"
         case .error:
-            return "exclamationmark.triangle.fill"
+            return "globe"
         }
     }
 
@@ -1618,6 +1618,7 @@ struct MenuContentView: View {
 
 private struct RoutesTableView: View {
     @State private var copiedValue: String?
+    @State private var hoveredStatusText: String?
 
     let quickRoutes: [LocalProxyRoute]
     let dnsRoutes: [LocalProxyRoute]
@@ -1638,31 +1639,47 @@ private struct RoutesTableView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             tableHeader
-            ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(quickRoutes, id: \.self) { route in
-                        routeRow(
-                            from: quickRouteFrom(route),
-                            port: route.targetPort,
-                            isActive: runningModes.contains(.quickURL),
-                            isPending: quickRouteIsPending(route),
-                            statusText: nil,
-                            remove: { removeQuickRoute(route) }
-                        )
-                    }
+            ZStack(alignment: .bottomLeading) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(quickRoutes, id: \.self) { route in
+                            routeRow(
+                                from: quickRouteFrom(route),
+                                port: route.targetPort,
+                                isActive: runningModes.contains(.quickURL),
+                                isPending: quickRouteIsPending(route),
+                                statusText: nil,
+                                remove: { removeQuickRoute(route) }
+                            )
+                        }
 
-                    ForEach(dnsRoutes, id: \.self) { route in
-                        routeRow(
-                            from: "\(route.hostname)\(displayPath(route.targetPath))",
-                            port: route.targetPort,
-                            isActive: runningModes.contains(.dns),
-                            isPending: dnsUnavailableReason != nil,
-                            statusText: runningModes.contains(.dns) ? nil : dnsUnavailableReason,
-                            remove: { removeDNSRoute(route) }
-                        )
+                        ForEach(dnsRoutes, id: \.self) { route in
+                            routeRow(
+                                from: "\(route.hostname)\(displayPath(route.targetPath))",
+                                port: route.targetPort,
+                                isActive: runningModes.contains(.dns),
+                                isPending: dnsUnavailableReason != nil,
+                                statusText: runningModes.contains(.dns) ? nil : dnsUnavailableReason,
+                                remove: { removeDNSRoute(route) }
+                            )
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let hoveredStatusText {
+                    Text(hoveredStatusText)
+                        .font(.caption2)
+                        .foregroundStyle(.primary)
+                        .lineLimit(4)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.regularMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .padding(6)
+                        .allowsHitTesting(false)
+                }
             }
             .frame(height: 86)
             .background(Color(nsColor: .textBackgroundColor))
@@ -1710,7 +1727,6 @@ private struct RoutesTableView: View {
                         .foregroundStyle(.orange)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .help(statusText)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1723,7 +1739,9 @@ private struct RoutesTableView: View {
         }
         .frame(height: 43)
         .padding(.horizontal, tableInset)
-        .help(statusText ?? "")
+        .onHover { hovering in
+            hoveredStatusText = hovering ? statusText : nil
+        }
     }
 
     private func copyableText(_ value: String, width: CGFloat?, truncationMode: Text.TruncationMode) -> some View {
