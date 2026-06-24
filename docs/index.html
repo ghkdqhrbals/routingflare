@@ -364,8 +364,7 @@
           <div>
             <h1>routingflare</h1>
             <p class="hero-copy">
-              macOS menu bar app for exposing local development ports through Cloudflare Tunnel.
-              Add Quick URL or DNS routes, restrict inbound access, and update from the app.
+              Open local ports through Cloudflare Tunnel from the macOS menu bar.
             </p>
             <div class="actions">
               <a class="button" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">Download DMG</a>
@@ -384,33 +383,32 @@
 
       <section id="features" class="section">
         <div class="section-head">
-          <h2>로컬 dev 서버를 메뉴바에서 바로 외부 오픈.</h2>
-          <p>routingflare는 로컬 필터링 프록시를 통해 Cloudflare Tunnel을 열고, 라우팅 리스트를 항상 상단에 보여줍니다.</p>
+          <h2>Local port to public URL.</h2>
         </div>
         <div class="features">
           <div class="feature">
             <strong>Quick URL</strong>
-            <p><code>trycloudflare.com</code> 임시 주소를 받아 포트와 path를 로컬 서버로 라우팅합니다.</p>
+            <p><code>trycloudflare.com</code> temporary URL.</p>
           </div>
           <div class="feature">
             <strong>DNS routes</strong>
-            <p>기존 Cloudflare named tunnel 설정으로 hostname, path, local port를 묶어 관리합니다.</p>
+            <p>Hostname, path, local port.</p>
           </div>
           <div class="feature">
             <strong>Security</strong>
-            <p>Inbound IP/CIDR allowlist와 optional auth header secret을 재시작 없이 적용합니다.</p>
+            <p>IP allowlist and auth header.</p>
           </div>
           <div class="feature">
-            <strong>Independent routes</strong>
-            <p>Quick URL, DNS, Security, Logs 탭을 바꿔도 라우팅 테이블은 독립적으로 유지됩니다.</p>
+            <strong>Routes</strong>
+            <p>From public address to local port.</p>
           </div>
           <div class="feature">
             <strong>Logs</strong>
-            <p>cloudflared output, public URL 파싱, proxy allow/deny 이벤트를 한 탭에서 확인합니다.</p>
+            <p>Tunnel and proxy events.</p>
           </div>
           <div class="feature">
             <strong>Updates</strong>
-            <p>About 팝업에서 GitHub Pages 소개 페이지를 열고, 최신 DMG를 체크/다운로드할 수 있습니다.</p>
+            <p>Check and install latest DMG.</p>
           </div>
         </div>
       </section>
@@ -418,7 +416,6 @@
       <section id="screenshots" class="section">
         <div class="section-head">
           <h2>Toolbar screenshots.</h2>
-          <p>Quick URL, DNS, Security 탭이 같은 route table을 공유하고, 각 탭은 추가/보안 설정만 담당합니다.</p>
         </div>
         <div class="screenshots">
           <div class="shot">
@@ -440,23 +437,23 @@
         <div class="flow-grid">
           <div class="flow">
             <span>1</span>
-            <strong>로컬 서버 실행</strong>
-            <p><code>127.0.0.1:8989</code> 같은 dev 서버를 먼저 켭니다.</p>
+            <strong>Local server</strong>
+            <p><code>127.0.0.1:8989</code></p>
           </div>
           <div class="flow">
             <span>2</span>
-            <strong>route 추가</strong>
-            <p>Quick URL은 port/path, DNS는 hostname/port/path를 추가합니다.</p>
+            <strong>Add route</strong>
+            <p>Port, path, DNS.</p>
           </div>
           <div class="flow">
             <span>3</span>
             <strong>Start</strong>
-            <p>상단 route list 전체를 기준으로 필요한 tunnel/proxy를 실행합니다.</p>
+            <p>Open tunnel.</p>
           </div>
           <div class="flow">
             <span>4</span>
-            <strong>접근 제한</strong>
-            <p>Security 탭에서 IP allowlist와 auth header secret을 관리합니다.</p>
+            <strong>Security</strong>
+            <p>Allowlist, secret header.</p>
           </div>
         </div>
       </section>
@@ -465,10 +462,7 @@
         <div class="release-panel">
           <div>
             <h2>Public DMG release.</h2>
-            <p>
-              GitHub Actions builds the signed app, packages a DMG, notarizes it when Apple credentials are configured,
-              creates a GitHub Release, and publishes this page with the current DMG link.
-            </p>
+            <p>Signed DMG, GitHub Release, latest download link.</p>
             <div class="status"><span class="dot"></span><span id="release-status">Release metadata loads from docs/release.json.</span></div>
           </div>
           <a class="button" id="release-download" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">Download latest DMG</a>
@@ -477,7 +471,7 @@
     </main>
 
     <footer>
-      routingflare is built for local development testing with Cloudflare Tunnel.
+      routingflare
     </footer>
 
     <script>
