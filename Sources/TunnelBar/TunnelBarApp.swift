@@ -838,6 +838,7 @@ final class TunnelBarViewModel: ObservableObject {
         let helperURL = try Self.applicationSupportDirectory()
             .appendingPathComponent("routingflare-update-\(UUID().uuidString).zsh")
         let currentAppURL = Bundle.main.bundleURL
+        let destinationAppURL = Self.updateDestinationAppURL(currentAppURL)
         let script = """
         #!/bin/zsh
         set -euo pipefail
@@ -883,7 +884,7 @@ final class TunnelBarViewModel: ObservableObject {
         process.arguments = [
             helperURL.path,
             dmgURL.path,
-            currentAppURL.path,
+            destinationAppURL.path,
             String(ProcessInfo.processInfo.processIdentifier),
             currentAppURL.deletingPathExtension().lastPathComponent,
             logURL.path
@@ -911,6 +912,15 @@ final class TunnelBarViewModel: ObservableObject {
 
     private var currentAppVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+    }
+
+    private static func updateDestinationAppURL(_ currentAppURL: URL) -> URL {
+        let path = currentAppURL.path
+        if path.hasPrefix("/Volumes/") || path.contains("/AppTranslocation/") {
+            return URL(fileURLWithPath: "/Applications", isDirectory: true)
+                .appendingPathComponent(currentAppURL.lastPathComponent)
+        }
+        return currentAppURL
     }
 
     private static func applicationSupportDirectory() throws -> URL {
