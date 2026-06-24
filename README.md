@@ -18,9 +18,9 @@ routingflare is a tiny macOS menu bar app for Cloudflare Tunnel. Use Quick URL f
 
 ## Screenshots
 
-![DNS routes](docs/assets/routingflare-dns.png)
+![DNS routes](docs/assets/routingflare-dns-live.png)
 
-![Security](docs/assets/routingflare-security.png)
+![Security](docs/assets/routingflare-security-live.png)
 
 ## Development
 

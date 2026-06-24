@@ -163,6 +163,46 @@
         margin-top: 44px;
       }
 
+      .screenshots {
+        margin-top: 54px;
+      }
+
+      .screenshots h2 {
+        margin: 0;
+        font-size: 28px;
+        line-height: 1.1;
+        letter-spacing: 0;
+      }
+
+      .screenshot-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+        margin-top: 18px;
+        align-items: start;
+      }
+
+      .screenshot {
+        overflow: hidden;
+        border: 1px solid #2c302e;
+        border-radius: 12px;
+        background: #111;
+        box-shadow: 0 18px 44px rgba(24, 30, 27, 0.12);
+      }
+
+      .screenshot img {
+        display: block;
+        width: 100%;
+      }
+
+      .screenshot strong {
+        display: block;
+        padding: 12px 14px;
+        background: var(--panel);
+        border-top: 1px solid var(--line);
+        font-size: 14px;
+      }
+
       .point {
         padding: 18px;
         border: 1px solid var(--line);
@@ -204,6 +244,7 @@
       @media (max-width: 820px) {
         header,
         .hero,
+        .screenshot-grid,
         .points {
           grid-template-columns: 1fr;
         }
@@ -260,6 +301,24 @@
           <div class="point">
             <strong>Security</strong>
             <span>Restrict inbound IPs and optionally require a secret auth header.</span>
+          </div>
+        </section>
+
+        <section class="screenshots" aria-label="Screenshots">
+          <h2>Screenshots</h2>
+          <div class="screenshot-grid">
+            <div class="screenshot">
+              <img src="assets/routingflare-hero.png" alt="Quick URL route screenshot" />
+              <strong>Quick URL</strong>
+            </div>
+            <div class="screenshot">
+              <img src="assets/routingflare-dns-live.png" alt="DNS route screenshot" />
+              <strong>DNS routes</strong>
+            </div>
+            <div class="screenshot">
+              <img src="assets/routingflare-security-live.png" alt="Security allowlist screenshot" />
+              <strong>Security</strong>
+            </div>
           </div>
         </section>
       </main>
