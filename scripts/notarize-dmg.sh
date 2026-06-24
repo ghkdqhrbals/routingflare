@@ -11,16 +11,21 @@ if [[ ! -f "$DMG_PATH" ]]; then
   exit 1
 fi
 
-if [[ -z "${NOTARY_KEY_ID:-}" || -z "${NOTARY_ISSUER_ID:-}" || -z "${NOTARY_KEY_PATH:-}" ]]; then
-  echo "Set NOTARY_KEY_ID, NOTARY_ISSUER_ID, and NOTARY_KEY_PATH for xcrun notarytool." >&2
+if [[ -z "${NOTARY_KEY_ID:-}" || -z "${NOTARY_KEY_PATH:-}" ]]; then
+  echo "Set NOTARY_KEY_ID and NOTARY_KEY_PATH for xcrun notarytool." >&2
   exit 1
 fi
 
-xcrun notarytool submit "$DMG_PATH" \
-  --key "$NOTARY_KEY_PATH" \
-  --key-id "$NOTARY_KEY_ID" \
-  --issuer "$NOTARY_ISSUER_ID" \
-  --wait
+NOTARY_ARGS=(
+  --key "$NOTARY_KEY_PATH"
+  --key-id "$NOTARY_KEY_ID"
+)
+
+if [[ -n "${NOTARY_ISSUER_ID:-}" ]]; then
+  NOTARY_ARGS+=(--issuer "$NOTARY_ISSUER_ID")
+fi
+
+xcrun notarytool submit "$DMG_PATH" "${NOTARY_ARGS[@]}" --wait
 
 xcrun stapler staple "$DMG_PATH"
 xcrun stapler validate "$DMG_PATH"
