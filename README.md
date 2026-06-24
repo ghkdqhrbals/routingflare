@@ -6,7 +6,7 @@ routingflare is a tiny macOS menu bar app for Cloudflare Tunnel. Use Quick URL f
 
 [Download DMG](https://github.com/ghkdqhrbals/routingflare/releases/latest) · [Project page](https://ghkdqhrbals.github.io/routingflare/)
 
-![routingflare Quick URL](docs/assets/routingflare-quick-url.png)
+![routingflare](docs/assets/routingflare-hero.png)
 
 ## Features
 
