@@ -1380,58 +1380,27 @@ struct MenuContentView: View {
 
     private var aboutPopup: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("About")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                koFiButton
+                Spacer()
+            }
+            Divider()
             aboutRow("App", Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "routingflare")
-            aboutRow("Version", "\(appVersion) (\(appBuild))")
+            versionRow
             aboutRow("Creator", "Gyumin Hwangbo")
-            Button {
-                model.openProjectPage()
-            } label: {
-                Label("Project Page", systemImage: "safari")
-            }
-            .buttonStyle(.plain)
-            Button {
-                model.openKoFiPage()
-            } label: {
-                AsyncImage(url: TunnelBarViewModel.koFiImageURL) { phase in
-                    switch phase {
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFit()
-                    case .failure:
-                        Text("Buy Me a Coffee")
-                            .font(.caption.weight(.semibold))
-                    case .empty:
-                        ProgressView()
-                            .controlSize(.small)
-                    @unknown default:
-                        EmptyView()
-                    }
-                }
-                .frame(width: 183, height: 36)
-                .accessibilityLabel("Buy Me a Coffee at ko-fi.com")
-            }
-            .buttonStyle(.borderless)
+            projectLinkRow
             Divider()
             VStack(alignment: .leading, spacing: 8) {
                 Text(updateSummary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                HStack {
-                    Button(action: model.checkForUpdates) {
-                        Label(model.updateStatus.label, systemImage: "arrow.down.circle")
+                if shouldShowInstallUpdate {
+                    Button(action: model.installUpdate) {
+                        Label("Install and Update", systemImage: "square.and.arrow.down")
                     }
                     .disabled(model.updateStatus == .checking || model.updateStatus == .downloading)
-                    if shouldShowInstallUpdate {
-                        Button(action: model.installUpdate) {
-                            Label("Install and Update", systemImage: "square.and.arrow.down")
-                        }
-                        .disabled(model.updateStatus == .checking || model.updateStatus == .downloading)
-                    }
                 }
             }
             HStack {
@@ -1443,6 +1412,65 @@ struct MenuContentView: View {
         }
         .padding(18)
         .frame(width: 340)
+    }
+
+    private var koFiButton: some View {
+        Button {
+            model.openKoFiPage()
+        } label: {
+            AsyncImage(url: TunnelBarViewModel.koFiImageURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFit()
+                case .failure:
+                    Text("Buy Me a Coffee")
+                        .font(.caption.weight(.semibold))
+                case .empty:
+                    ProgressView()
+                        .controlSize(.small)
+                @unknown default:
+                    EmptyView()
+                }
+            }
+            .frame(width: 183, height: 36)
+            .accessibilityLabel("Buy Me a Coffee at ko-fi.com")
+        }
+        .buttonStyle(.borderless)
+    }
+
+    private var versionRow: some View {
+        HStack {
+            Text("Version")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(width: 54, alignment: .leading)
+            Text("\(appVersion) (\(appBuild))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Spacer()
+            Button(action: model.checkForUpdates) {
+                Text(model.updateStatus == .checking ? "Checking..." : "Check")
+                    .font(.caption.weight(.semibold))
+            }
+            .disabled(model.updateStatus == .checking || model.updateStatus == .downloading)
+        }
+    }
+
+    private var projectLinkRow: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text("Project")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(width: 54, alignment: .leading)
+            Link(TunnelBarViewModel.projectPageURL.absoluteString, destination: TunnelBarViewModel.projectPageURL)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+        }
     }
 
     private var updateSummary: String {
