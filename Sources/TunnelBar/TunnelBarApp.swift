@@ -207,6 +207,7 @@ final class TunnelBarViewModel: ObservableObject {
     @Published var authHeaderSecret = ""
     @Published var updateStatus: UpdateStatus = .idle
     @Published var latestUpdateURL: URL?
+    @Published private var dnsCloudflaredIssue: String?
 
     private let settingsStore: SettingsStoring
     private let secretStore: SecretStoring
@@ -293,6 +294,9 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     var dnsUnavailableReason: String? {
+        if let dnsCloudflaredIssue {
+            return dnsCloudflaredIssue
+        }
         guard !activeDNSRoutes.isEmpty else {
             return nil
         }
@@ -400,6 +404,7 @@ final class TunnelBarViewModel: ObservableObject {
         saveSettings()
         publicURL = nil
         quickPublicURLs = [:]
+        dnsCloudflaredIssue = nil
         requiresRestart = false
         status = .starting
         activeTunnelModes = []
@@ -438,6 +443,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func startDNSTunnel() throws {
+            dnsCloudflaredIssue = nil
             let proxy: LocalFilteringProxy
             let logHandler: @Sendable (String) -> Void = { [weak self] line in
                 Task { @MainActor in
@@ -815,7 +821,16 @@ final class TunnelBarViewModel: ObservableObject {
 
     private func handleTunnelOutput(_ output: String) {
         appendLog(output)
+        if let issue = cloudflaredIssue(from: output) {
+            dnsCloudflaredIssue = issue
+            activeTunnelModes.remove(.dns)
+            if activeTunnelModes.subtracting([.dns]).isEmpty {
+                status = .error(issue)
+            }
+            return
+        }
         if let parsedURL = TunnelURLParser.parsePublicURL(from: output) {
+            dnsCloudflaredIssue = nil
             publicURL = PublicURLBuilder.build(baseURL: parsedURL, targetPath: activeTargetPaths.first ?? "/")
             activeTunnelModes.insert(.dns)
             status = .running
@@ -840,9 +855,12 @@ final class TunnelBarViewModel: ObservableObject {
         guard status != .stopped else { return }
         activeTunnelModes.remove(mode)
         if statusCode != 0 {
-            status = .error("cloudflared exited with status \(statusCode)")
+            let issue = dnsCloudflaredIssue ?? "cloudflared exited with status \(statusCode)"
+            dnsCloudflaredIssue = issue
+            status = .error(issue)
             return
         }
+        dnsCloudflaredIssue = nil
         if activeTunnelModes.isEmpty {
             status = .stopped
         }
@@ -1133,6 +1151,20 @@ final class TunnelBarViewModel: ObservableObject {
         if logs.count > 200 {
             logs.removeFirst(logs.count - 200)
         }
+    }
+
+    private func cloudflaredIssue(from output: String) -> String? {
+        output
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { $0.contains(" ERR ") || $0.hasSuffix(" ERR") })
+            .map { line in
+                if let range = line.range(of: " ERR ") {
+                    let message = String(line[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    return "cloudflared: \(message)"
+                }
+                return "cloudflared: \(line)"
+            }
     }
 }
 
@@ -1624,7 +1656,7 @@ private struct RoutesTableView: View {
                             from: "\(route.hostname)\(displayPath(route.targetPath))",
                             port: route.targetPort,
                             isActive: runningModes.contains(.dns),
-                            isPending: false,
+                            isPending: dnsUnavailableReason != nil,
                             statusText: runningModes.contains(.dns) ? nil : dnsUnavailableReason,
                             remove: { removeDNSRoute(route) }
                         )
