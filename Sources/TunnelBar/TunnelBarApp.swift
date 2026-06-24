@@ -820,12 +820,13 @@ struct MenuContentView: View {
     }
 
     private var modeControls: some View {
-        Picker("Tab", selection: $model.selectedTab) {
+        Picker("", selection: $model.selectedTab) {
             ForEach(AppTab.allCases) { tab in
                 Text(tab.label).tag(tab)
             }
         }
         .pickerStyle(.segmented)
+        .labelsHidden()
         .onChange(of: model.selectedTab) { _, tab in model.selectTab(tab) }
     }
 
