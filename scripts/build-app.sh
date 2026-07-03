@@ -3,9 +3,10 @@ set -euo pipefail
 
 APP_NAME="${APP_NAME:-routingflare}"
 PRODUCT_NAME="${PRODUCT_NAME:-TunnelBar}"
+CLI_PRODUCT_NAME="${CLI_PRODUCT_NAME:-routingflare}"
 EXECUTABLE_NAME="${EXECUTABLE_NAME:-TunnelBar}"
 DISPLAY_NAME="${DISPLAY_NAME:-routingflare}"
-BUNDLE_ID="${BUNDLE_ID:-dev.local.tunnelbar}"
+BUNDLE_ID="${BUNDLE_ID:-com.gyuminhwangbo.RoutingFlare}"
 VERSION="${VERSION:-1.0.0}"
 BUILD_NUMBER="${BUILD_NUMBER:-1}"
 CONFIGURATION="${CONFIGURATION:-release}"
@@ -21,9 +22,12 @@ rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 swift build -c "$CONFIGURATION" --product "$PRODUCT_NAME" --scratch-path "$ROOT_DIR/.build"
+swift build -c "$CONFIGURATION" --product "$CLI_PRODUCT_NAME" --scratch-path "$ROOT_DIR/.build"
 
 cp "$BUILD_DIR/$PRODUCT_NAME" "$MACOS_DIR/$EXECUTABLE_NAME"
 chmod 755 "$MACOS_DIR/$EXECUTABLE_NAME"
+cp "$BUILD_DIR/$CLI_PRODUCT_NAME" "$MACOS_DIR/$CLI_PRODUCT_NAME"
+chmod 755 "$MACOS_DIR/$CLI_PRODUCT_NAME"
 
 sed \
   -e "s/APP_BUNDLE_ID/$BUNDLE_ID/g" \

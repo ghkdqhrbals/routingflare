@@ -4,20 +4,36 @@ import TunnelBarCore
 
 @main
 struct TunnelBarApp: App {
-    @StateObject private var model = TunnelBarViewModel()
+    @NSApplicationDelegateAdaptor(RoutingFlareLaunchDelegate.self) private var launchDelegate
+    @StateObject private var model: TunnelBarViewModel
 
     init() {
         RoutingFlareSingleInstance.terminateExistingInstances()
+        _model = StateObject(wrappedValue: RoutingFlareRuntime.shared.model)
     }
 
     var body: some Scene {
         MenuBarExtra {
-            MenuContentView(model: model)
-                .frame(width: 360)
+            NativeMenuContentView(model: model)
         } label: {
             Image(systemName: model.status.systemImage)
         }
-        .menuBarExtraStyle(.window)
+        .menuBarExtraStyle(.menu)
+    }
+}
+
+@MainActor
+private final class RoutingFlareRuntime {
+    static let shared = RoutingFlareRuntime()
+    let model = TunnelBarViewModel()
+
+    private init() {}
+}
+
+@MainActor
+private final class RoutingFlareLaunchDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        RoutingFlareWindowPresenter.shared.show(model: RoutingFlareRuntime.shared.model)
     }
 }
 
@@ -85,24 +101,40 @@ private struct TunnelStartError: LocalizedError {
     }
 }
 
+private enum AppTypography {
+    static let title = Font.system(size: 30, weight: .semibold)
+    static let sectionTitle = Font.system(size: 17, weight: .semibold)
+    static let content = Font.system(size: 14, weight: .medium)
+    static let contentStrong = Font.system(size: 14, weight: .semibold)
+}
+
 enum AppTab: String, CaseIterable, Identifiable {
+    case routes
     case quickURL
     case dns
     case security
+    case options
     case logs
+    case about
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
+        case .routes:
+            return "Routing"
         case .quickURL:
-            return "Quick URL"
+            return "Random DNS"
         case .dns:
             return "DNS"
         case .security:
             return "Security"
+        case .options:
+            return "Options"
         case .logs:
             return "Logs"
+        case .about:
+            return "About"
         }
     }
 
@@ -112,9 +144,32 @@ enum AppTab: String, CaseIterable, Identifiable {
             return .quickURL
         case .dns:
             return .dns
-        case .security, .logs:
+        case .routes, .security, .options, .logs, .about:
             return nil
         }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .routes:
+            return "list.bullet.rectangle"
+        case .quickURL:
+            return "globe"
+        case .dns:
+            return "network"
+        case .security:
+            return "lock.shield"
+        case .options:
+            return "slider.horizontal.3"
+        case .logs:
+            return "doc.text"
+        case .about:
+            return "info.circle"
+        }
+    }
+
+    var subtitle: String? {
+        nil
     }
 }
 
@@ -250,12 +305,15 @@ final class TunnelBarViewModel: ObservableObject {
     private let accessPolicy: MutableProxyAccessPolicy
     private var proxy: LocalFilteringProxy?
     private var quickSessions: [QuickTunnelSession] = []
+    private var cliCommandObserver: NSObjectProtocol?
     private var cloudflaredConfigURL: URL?
     private var activeTunnelModes: Set<TunnelMode> = []
+    private var authHeaderSecretLoaded = false
     private static let authHeaderSecretAccount = "routingflare.authHeaderSecret"
     private static let releaseAPIURL = URL(string: "https://api.github.com/repos/ghkdqhrbals/routingflare/releases/latest")!
     static let projectPageURL = URL(string: "https://ghkdqhrbals.github.io/routingflare/")!
     static let releasesURL = URL(string: "https://github.com/ghkdqhrbals/routingflare/releases/latest")!
+    static let aboutMeURL = URL(string: "https://github.com/ghkdqhrbals")!
     static let koFiURL = URL(string: "https://ko-fi.com/D8X421KF0U")!
     static let koFiImageURL = URL(string: "https://storage.ko-fi.com/cdn/kofi6.png?v=6")!
 
@@ -299,19 +357,24 @@ final class TunnelBarViewModel: ObservableObject {
         }
         self.newDNSPortText = String(loaded.dnsTargetPort)
         self.newQuickPortText = String(loaded.targetPort)
-        self.selectedTab = loaded.mode == .quickURL ? .quickURL : .dns
-        let loadedAuthHeaderSecret = secretStore.read(account: Self.authHeaderSecretAccount) ?? ""
-        self.authHeaderSecret = loadedAuthHeaderSecret
+        self.selectedTab = .routes
         self.settings = loaded
         self.accessPolicy = MutableProxyAccessPolicy(
             allowlistEntries: loaded.allowlistEntries,
             authHeader: Self.authHeader(
                 enabled: loaded.authHeaderEnabled,
                 name: loaded.authHeaderName,
-                secret: loadedAuthHeaderSecret
+                secret: ""
             )
         )
+        setupCLICommandObserver()
+        handlePendingCLICommand()
         autoInstallCloudflaredIfNeeded()
+        if loaded.autoStart {
+            Task { @MainActor in
+                self.start()
+            }
+        }
     }
 
     var canStart: Bool {
@@ -381,6 +444,66 @@ final class TunnelBarViewModel: ObservableObject {
         settingsStore.save(settings)
     }
 
+    private func setupCLICommandObserver() {
+        cliCommandObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name(RoutingFlareDefaults.commandNotificationName),
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let command = notification.userInfo?["command"] as? String else { return }
+            Task { @MainActor in
+                self?.handleCLICommand(command)
+            }
+        }
+    }
+
+    private func handlePendingCLICommand() {
+        let defaults = RoutingFlareDefaults.userDefaults()
+        guard let command = defaults.string(forKey: RoutingFlareDefaults.pendingCommandKey) else {
+            return
+        }
+        defaults.removeObject(forKey: RoutingFlareDefaults.pendingCommandKey)
+        handleCLICommand(command)
+    }
+
+    private func handleCLICommand(_ command: String) {
+        RoutingFlareDefaults.userDefaults().removeObject(forKey: RoutingFlareDefaults.pendingCommandKey)
+        switch command {
+        case "start":
+            if status.isStarted || requiresRestart {
+                restart()
+            } else {
+                start()
+            }
+        case "stop":
+            stop()
+        case "open":
+            selectedTab = .routes
+            RoutingFlareWindowPresenter.shared.show(model: self)
+        case "settings":
+            selectedTab = .options
+            RoutingFlareWindowPresenter.shared.show(model: self)
+        case "reload":
+            reloadSettingsFromStore()
+        default:
+            appendLog("Unknown CLI command: \(command)")
+        }
+    }
+
+    private func reloadSettingsFromStore() {
+        let wasStarted = status.isStarted
+        settings = settingsStore.load()
+        newDNSPortText = String(settings.dnsTargetPort)
+        newQuickPortText = String(settings.targetPort)
+        updateAccessPolicy()
+        if wasStarted {
+            requiresRestart = true
+            appendLog("Settings updated from CLI. Restart to apply route changes.")
+        } else {
+            appendLog("Settings updated from CLI.")
+        }
+    }
+
     func detectCloudflared() {
         if let detected = CloudflaredLocator().find(configuredPath: settings.cloudflaredPath) {
             settings.cloudflaredPath = detected
@@ -437,6 +560,8 @@ final class TunnelBarViewModel: ObservableObject {
 
     func start() {
         saveSettings()
+        loadAuthHeaderSecretIfNeeded()
+        updateAccessPolicy()
         publicURL = nil
         quickPublicURLs = [:]
         dnsCloudflaredIssue = nil
@@ -447,8 +572,12 @@ final class TunnelBarViewModel: ObservableObject {
 
         do {
             if !activeQuickRoutes.isEmpty {
-                try startQuickTunnels()
-                startedAnyTunnel = true
+                if hasCloudflared {
+                    try startQuickTunnels()
+                    startedAnyTunnel = true
+                } else {
+                    appendLog("Random DNS routes not started: cloudflared was not found")
+                }
             }
 
             if canStartDNS {
@@ -628,6 +757,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     func saveAuthHeaderSettings() {
+        authHeaderSecretLoaded = true
         settings.authHeaderName = normalizedAuthHeaderName
         if authHeaderSecret.isEmpty {
             try? secretStore.delete(account: Self.authHeaderSecretAccount)
@@ -642,10 +772,17 @@ final class TunnelBarViewModel: ObservableObject {
         saveSettings()
     }
 
-    func addDNSRoute() {
+    func loadAuthHeaderSecretIfNeeded() {
+        guard !authHeaderSecretLoaded else { return }
+        authHeaderSecret = secretStore.read(account: Self.authHeaderSecretAccount) ?? ""
+        authHeaderSecretLoaded = true
+    }
+
+    @discardableResult
+    func addDNSRoute() -> Bool {
         let hostname = newDNSHostname.trimmingCharacters(in: .whitespacesAndNewlines)
         var path = newDNSPathText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canAddDNSRoute, let port = parsedPort(newDNSPortText), !hostname.isEmpty else { return }
+        guard canAddDNSRoute, let port = parsedPort(newDNSPortText), !hostname.isEmpty else { return false }
         if path.isEmpty {
             path = "/"
         }
@@ -664,11 +801,13 @@ final class TunnelBarViewModel: ObservableObject {
         if didAdd {
             refreshDNSTunnelIfNeeded()
         }
+        return didAdd
     }
 
-    func addQuickRoute() {
+    @discardableResult
+    func addQuickRoute() -> Bool {
         var path = newQuickPathText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let port = parsedPort(newQuickPortText) else { return }
+        guard let port = parsedPort(newQuickPortText) else { return false }
         if path.isEmpty {
             path = "/"
         }
@@ -686,6 +825,7 @@ final class TunnelBarViewModel: ObservableObject {
         if didAdd {
             startQuickRouteIfNeeded(route)
         }
+        return didAdd
     }
 
     func removeQuickRoute(_ route: LocalProxyRoute) {
@@ -764,6 +904,10 @@ final class TunnelBarViewModel: ObservableObject {
 
     func openProjectPage() {
         NSWorkspace.shared.open(Self.projectPageURL)
+    }
+
+    func openAboutMePage() {
+        NSWorkspace.shared.open(Self.aboutMeURL)
     }
 
     func openKoFiPage() {
@@ -1214,7 +1358,7 @@ final class TunnelBarViewModel: ObservableObject {
             if quickRouteIsPending(route) {
                 return "Fetching URL..."
             }
-            return "Quick URL\(route.targetPath == "/" ? "" : route.targetPath)"
+            return "random dns\(route.targetPath == "/" ? "" : route.targetPath)"
         }
         return "\(host)\(url.path == "/" ? "" : url.path)"
     }
@@ -1361,21 +1505,596 @@ final class TunnelBarViewModel: ObservableObject {
     }
 }
 
+struct NativeMenuContentView: View {
+    @ObservedObject var model: TunnelBarViewModel
+
+    var body: some View {
+        Section("Routing") {
+            primaryRouteItems
+            if hasMoreRoutes {
+                Menu("More") {
+                    allRouteItems
+                }
+            }
+        }
+        Divider()
+        Button {
+            openRoutesWindow()
+        } label: {
+            Label("Open routingflare", systemImage: "macwindow")
+        }
+        Button {
+            openSettingsWindow()
+        } label: {
+            Label("Settings", systemImage: "gearshape")
+        }
+        Button {
+            openAboutTab()
+        } label: {
+            Label("About", systemImage: "info.circle")
+        }
+        Divider()
+        Button(action: model.quit) {
+            Label("Quit routingflare", systemImage: "power")
+        }
+    }
+
+    @ViewBuilder
+    private var primaryRouteItems: some View {
+        if model.activeQuickRoutes.isEmpty && model.activeDNSRoutes.isEmpty {
+            Button {
+                openRoutesWindow()
+            } label: {
+                Label("Add route...", systemImage: "plus.circle")
+            }
+        } else {
+            ForEach(model.activeQuickRoutes.prefix(2), id: \.self) { route in
+                Button {
+                    openRoutesWindow()
+                } label: {
+                    routeMenuLabel(forQuickRoute: route)
+                }
+            }
+            ForEach(model.activeDNSRoutes.prefix(2), id: \.self) { route in
+                Button {
+                    openRoutesWindow()
+                } label: {
+                    routeMenuLabel(forDNSRoute: route)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var allRouteItems: some View {
+        ForEach(model.activeQuickRoutes, id: \.self) { route in
+            Button {
+                openRoutesWindow()
+            } label: {
+                routeMenuLabel(forQuickRoute: route)
+            }
+        }
+        ForEach(model.activeDNSRoutes, id: \.self) { route in
+            Button {
+                openRoutesWindow()
+            } label: {
+                routeMenuLabel(forDNSRoute: route)
+            }
+        }
+    }
+
+    private var totalRouteCount: Int {
+        model.activeQuickRoutes.count + model.activeDNSRoutes.count
+    }
+
+    private var hasMoreRoutes: Bool {
+        model.activeQuickRoutes.count > 2 || model.activeDNSRoutes.count > 2
+    }
+
+    private func dnsRouteFrom(_ route: LocalProxyRoute) -> String {
+        "\(route.hostname)\(route.targetPath == "/" ? "" : route.targetPath)"
+    }
+
+    private func routeMenuLabel(forQuickRoute route: LocalProxyRoute) -> some View {
+        Text(routeMenuTitle(
+            from: model.quickRouteFrom(route),
+            to: "127.0.0.1:\(route.targetPort)",
+            status: quickRouteStatus(route)
+        ))
+    }
+
+    private func routeMenuLabel(forDNSRoute route: LocalProxyRoute) -> some View {
+        Text(routeMenuTitle(
+            from: dnsRouteFrom(route),
+            to: "127.0.0.1:\(route.targetPort)",
+            status: dnsRouteStatus
+        ))
+    }
+
+    private func routeMenuTitle(from: String, to: String, status: RouteMenuStatus) -> AttributedString {
+        var dot = AttributedString("● ")
+        dot.foregroundColor = status.color
+
+        var title = AttributedString(from)
+        title.foregroundColor = .primary
+        dot.append(title)
+
+        var target = AttributedString("\n\(status.title) · to \(to)")
+        target.font = .caption
+        target.foregroundColor = .secondary
+
+        dot.append(target)
+        return dot
+    }
+
+    private func quickRouteStatus(_ route: LocalProxyRoute) -> RouteMenuStatus {
+        if model.quickRouteIsPending(route) {
+            return .pending
+        }
+        if model.runningModes.contains(.quickURL) && !model.requiresRestart {
+            return .opened
+        }
+        return model.requiresRestart ? .restartRequired : .stopped
+    }
+
+    private var dnsRouteStatus: RouteMenuStatus {
+        if model.dnsUnavailableReason != nil {
+            return .error
+        }
+        if model.runningModes.contains(.dns) && !model.requiresRestart {
+            return .opened
+        }
+        return model.requiresRestart ? .restartRequired : .stopped
+    }
+
+    private func openRoutesWindow() {
+        model.selectedTab = .routes
+        RoutingFlareWindowPresenter.shared.show(model: model)
+    }
+
+    private func openSettingsWindow() {
+        model.selectedTab = .security
+        RoutingFlareWindowPresenter.shared.show(model: model)
+    }
+
+    private func openAboutTab() {
+        model.selectedTab = .about
+        RoutingFlareWindowPresenter.shared.show(model: model)
+    }
+}
+
+private enum RouteMenuStatus {
+    case opened
+    case pending
+    case restartRequired
+    case error
+    case stopped
+
+    var title: String {
+        switch self {
+        case .opened:
+            return "Opened"
+        case .pending:
+            return "Fetching"
+        case .restartRequired:
+            return "Restart needed"
+        case .error:
+            return "Error"
+        case .stopped:
+            return "Stopped"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .opened:
+            return .green
+        case .pending, .restartRequired, .error:
+            return .orange
+        case .stopped:
+            return .secondary
+        }
+    }
+}
+
+@MainActor
+private final class RoutingFlareWindowPresenter {
+    static let shared = RoutingFlareWindowPresenter()
+
+    private var window: NSWindow?
+
+    func show(model: TunnelBarViewModel) {
+        if let window {
+            bringToFront(window)
+            return
+        }
+
+        let hostingController = NSHostingController(
+            rootView: AppWindowView(model: model)
+                .frame(minWidth: 980, minHeight: 660)
+        )
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = "routingflare"
+        window.setContentSize(NSSize(width: 980, height: 660))
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        window.titlebarAppearsTransparent = true
+        window.isReleasedWhenClosed = false
+        window.level = .normal
+        window.collectionBehavior = [.moveToActiveSpace]
+        window.center()
+        window.delegate = WindowCloseDelegate.shared
+        WindowCloseDelegate.shared.onClose = { [weak self] in
+            self?.window = nil
+        }
+        self.window = window
+        bringToFront(window)
+    }
+
+    func bringToFront() {
+        guard let window else { return }
+        bringToFront(window)
+    }
+
+    private func bringToFront(_ window: NSWindow) {
+        NSApplication.shared.setActivationPolicy(.regular)
+        NSApplication.shared.unhide(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        window.deminiaturize(nil)
+        window.level = .normal
+        window.makeKeyAndOrderFront(nil)
+        window.makeMain()
+    }
+}
+
+@MainActor
+private final class WindowCloseDelegate: NSObject, NSWindowDelegate {
+    static let shared = WindowCloseDelegate()
+    var onClose: (() -> Void)?
+
+    func windowWillClose(_ notification: Notification) {
+        onClose?()
+    }
+}
+
+private struct AboutPanelView: View {
+    @ObservedObject var model: TunnelBarViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Spacer()
+                koFiButton
+                Spacer()
+            }
+            Divider()
+            aboutRow("App", Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "routingflare")
+            versionRow
+            aboutRow("Creator", "Gyumin Hwangbo")
+            projectLinkRow
+            Divider()
+            aboutMeSection
+            Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                Text(updateSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if shouldShowInstallUpdate {
+                    Button(action: model.installUpdate) {
+                        Label("Install and Update", systemImage: "square.and.arrow.down")
+                    }
+                    .disabled(model.updateStatus == .checking || model.updateStatus == .downloading || model.updateStatus == .installing)
+                }
+            }
+        }
+        .frame(maxWidth: 560, alignment: .leading)
+    }
+
+    private var koFiButton: some View {
+        Button {
+            model.openKoFiPage()
+        } label: {
+            AsyncImage(url: TunnelBarViewModel.koFiImageURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFit()
+                case .failure, .empty:
+                    coffeeFallbackLabel
+                @unknown default:
+                    coffeeFallbackLabel
+                }
+            }
+            .frame(width: 183, height: 36)
+            .accessibilityLabel("Buy Me a Coffee at ko-fi.com")
+        }
+        .buttonStyle(.borderless)
+    }
+
+    private var coffeeFallbackLabel: some View {
+        Text("Buy me a coffee")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.white)
+            .frame(width: 183, height: 36)
+            .background(Color.black)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private var versionRow: some View {
+        HStack {
+            Text("Version")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(width: 54, alignment: .leading)
+            Text("\(appVersion) (\(appBuild))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Spacer()
+            Button(action: model.checkForUpdates) {
+                Text(model.updateStatus == .checking ? "Checking..." : "Check")
+                    .font(.caption.weight(.semibold))
+            }
+            .disabled(model.updateStatus == .checking || model.updateStatus == .downloading || model.updateStatus == .installing)
+        }
+    }
+
+    private var projectLinkRow: some View {
+        linkRow("Project", TunnelBarViewModel.projectPageURL.absoluteString, TunnelBarViewModel.projectPageURL)
+    }
+
+    private var aboutMeSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("About me")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.primary)
+            Text("I'm Gyumin Hwangbo. I build small developer tools for faster local testing, QA, and deployment workflows.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Link(TunnelBarViewModel.aboutMeURL.absoluteString, destination: TunnelBarViewModel.aboutMeURL)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
+    private var updateSummary: String {
+        switch model.updateStatus {
+        case .idle:
+            return "Current version: \(appVersion)"
+        case .checking:
+            return "Checking for updates. Current version: \(appVersion)"
+        case .available(let version):
+            return "New version available: \(version). Current version: \(appVersion)."
+        case .current:
+            return "Up to date. Current version: \(appVersion)."
+        case .failed(let message):
+            return "Update check failed. Current version: \(appVersion). \(message)"
+        case .downloading:
+            return "Downloading update. Current version: \(appVersion)."
+        case .installing:
+            return "Installing update. routingflare will restart automatically."
+        case .downloaded:
+            return "Update downloaded. Open the DMG to install."
+        }
+    }
+
+    private var shouldShowInstallUpdate: Bool {
+        switch model.updateStatus {
+        case .available, .downloaded:
+            return true
+        case .idle, .checking, .current, .failed, .downloading, .installing:
+            return false
+        }
+    }
+
+    private func aboutRow(_ title: String, _ value: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(width: 54, alignment: .leading)
+            Text(value)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Spacer()
+        }
+    }
+
+    private func linkRow(_ title: String, _ label: String, _ url: URL) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(width: 54, alignment: .leading)
+            Link(label, destination: url)
+                .font(.caption)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+        }
+    }
+
+    private var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0"
+    }
+
+    private var appBuild: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "-"
+    }
+}
+
+struct AppWindowView: View {
+    @ObservedObject var model: TunnelBarViewModel
+
+    var body: some View {
+        HSplitView {
+            sidebar
+                .frame(minWidth: 180, idealWidth: 220, maxWidth: 340, maxHeight: .infinity)
+
+            detail
+                .frame(minWidth: 640, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            windowHeader
+                .padding(.horizontal, 16)
+                .padding(.top, 18)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(AppTab.allCases) { tab in
+                        sidebarRow(tab)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 14)
+            }
+        }
+        .background(.regularMaterial)
+    }
+
+    private var detail: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            detailHeader
+
+            Divider()
+
+            MenuContentView(
+                model: model,
+                showsHeader: false,
+                showsRoutes: false,
+                showsTabs: false,
+                showsFooter: false
+            )
+            .padding(0)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            Spacer(minLength: 0)
+        }
+        .padding(28)
+    }
+
+    private func sidebarRow(_ tab: AppTab) -> some View {
+        Button {
+            model.selectTab(tab)
+        } label: {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(tab.label)
+                        .font(.system(size: 14, weight: model.selectedTab == tab ? .semibold : .regular))
+                    if let subtitle = tab.subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, minHeight: tab.subtitle == nil ? 34 : 44, alignment: .leading)
+            .foregroundStyle(model.selectedTab == tab ? .white : .primary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+            .background {
+                if model.selectedTab == tab {
+                    RoundedRectangle(cornerRadius: 7)
+                        .fill(Color.accentColor)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var windowHeader: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(model.status.isStarted ? .green : .secondary)
+                .frame(width: 9, height: 9)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("routingflare")
+                    .font(AppTypography.sectionTitle)
+                Text(model.status.label)
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+            }
+            Spacer()
+        }
+    }
+
+    private var detailHeader: some View {
+        HStack(alignment: .center) {
+            Text(model.selectedTab.label)
+                .font(AppTypography.title)
+            Spacer()
+            Toggle("Start", isOn: Binding(
+                get: { model.status.isStarted },
+                set: { enabled in
+                    if enabled {
+                        model.start()
+                    } else {
+                        model.stop()
+                    }
+                }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.large)
+            .disabled(model.status == .starting || (!model.canStart && (model.status.canStartTunnel || model.requiresRestart)))
+        }
+    }
+
+    private func primaryAction() {
+        if model.requiresRestart {
+            model.restart()
+        } else if model.status.canStartTunnel {
+            model.start()
+        } else {
+            model.stop()
+        }
+    }
+
+    private var primaryActionTitle: String {
+        if model.requiresRestart { return "Restart" }
+        return model.status.canStartTunnel ? "Start" : "Stop"
+    }
+
+    private var primaryActionIcon: String {
+        if model.requiresRestart { return "arrow.clockwise" }
+        return model.status.canStartTunnel ? "play.fill" : "stop.fill"
+    }
+}
+
 struct MenuContentView: View {
     @ObservedObject var model: TunnelBarViewModel
-    @State private var showsAbout = false
     @State private var showsAuthSecret = false
+    var showsHeader = true
+    var showsRoutes = true
+    var showsTabs = true
+    var showsFooter = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            header
-            routesTable
-            modeControls
+            if showsHeader {
+                header
+            }
+            if showsRoutes {
+                routesTable
+            }
+            if showsTabs {
+                modeControls
+            }
             tabContent
-            Divider()
-            footerControls
+            if showsFooter {
+                Divider()
+                footerControls
+            }
         }
-        .padding(16)
+        .padding(showsTabs ? 16 : 0)
         .frame(maxHeight: 1170, alignment: .top)
         .transaction { transaction in
             transaction.animation = nil
@@ -1392,28 +2111,35 @@ struct MenuContentView: View {
             quickRouteFrom: { model.quickRouteFrom($0) },
             quickRouteIsPending: { model.quickRouteIsPending($0) },
             removeQuickRoute: { model.removeQuickRoute($0) },
-            removeDNSRoute: { model.removeDNSRoute($0) }
+            removeDNSRoute: { model.removeDNSRoute($0) },
+            tableHeight: showsTabs ? 86 : 260
         )
     }
 
     @ViewBuilder
     private var tabContent: some View {
-        if model.selectedTab == .quickURL {
+        if model.selectedTab == .routes {
+            routesTable
+        } else if model.selectedTab == .quickURL {
             quickRouteForm
         } else if model.selectedTab == .dns {
             dnsControls
             dnsRouteForm
         } else if model.selectedTab == .security {
             securityControls
+        } else if model.selectedTab == .options {
+            optionsControls
         } else if model.selectedTab == .logs {
             logsView
+        } else if model.selectedTab == .about {
+            AboutPanelView(model: model)
         }
     }
 
     private var header: some View {
         HStack {
             Label(model.status.label, systemImage: model.status.systemImage)
-                .font(.headline)
+                .font(AppTypography.sectionTitle)
             Spacer()
             Text(model.allowlistSummary)
                 .font(.caption)
@@ -1422,24 +2148,24 @@ struct MenuContentView: View {
     }
 
     private var quickRouteForm: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Add Quick Route")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add Random DNS")
+                .font(AppTypography.sectionTitle)
             HStack(spacing: 6) {
                 TextField("8989", text: $model.newQuickPortText)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 66)
+                    .frame(width: 90)
                     .onChange(of: model.newQuickPortText) { _, value in
                         model.newQuickPortText = digitsOnly(value)
                     }
                 TextField("/console", text: $model.newQuickPathText)
                     .textFieldStyle(.roundedBorder)
-                    .onSubmit(model.addQuickRoute)
-                Button(action: model.addQuickRoute) {
+                    .onSubmit(addQuickRouteAndShowRouting)
+                Button(action: addQuickRouteAndShowRouting) {
                     Image(systemName: "plus")
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.large)
             }
         }
     }
@@ -1459,7 +2185,7 @@ struct MenuContentView: View {
     private var dnsControls: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Tunnel")
-                .font(.caption)
+                .font(AppTypography.sectionTitle)
                 .foregroundStyle(.secondary)
             TextField("Tunnel ID, e.g. 24c83c3f-...", text: $model.settings.dnsTunnelID)
                 .textFieldStyle(.roundedBorder)
@@ -1471,27 +2197,40 @@ struct MenuContentView: View {
     }
 
     private var dnsRouteForm: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Add DNS Route")
-                .font(.caption)
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add DNS")
+                .font(AppTypography.sectionTitle)
                 .foregroundStyle(.secondary)
             HStack(spacing: 6) {
                 TextField("dev.example.com", text: $model.newDNSHostname)
                     .textFieldStyle(.roundedBorder)
                 TextField("8989", text: $model.newDNSPortText)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 66)
+                    .frame(width: 90)
                     .onChange(of: model.newDNSPortText) { _, value in
                         model.newDNSPortText = digitsOnly(value)
                     }
                 TextField("/console", text: $model.newDNSPathText)
                     .textFieldStyle(.roundedBorder)
-                Button(action: model.addDNSRoute) {
+                Button(action: addDNSRouteAndShowRouting) {
                     Image(systemName: "plus")
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.large)
                 .disabled(!model.canAddDNSRoute)
             }
+        }
+    }
+
+    private func addQuickRouteAndShowRouting() {
+        if model.addQuickRoute() {
+            model.selectedTab = .routes
+        }
+    }
+
+    private func addDNSRouteAndShowRouting() {
+        if model.addDNSRoute() {
+            model.selectedTab = .routes
         }
     }
 
@@ -1532,9 +2271,9 @@ struct MenuContentView: View {
     }
 
     private var allowlistControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("Inbound IP Allowlist")
-                .font(.caption)
+                .font(AppTypography.sectionTitle)
                 .foregroundStyle(.secondary)
             HStack {
                 TextField("203.0.113.10 or 198.51.100.0/24", text: $model.newAllowlistEntry)
@@ -1563,12 +2302,27 @@ struct MenuContentView: View {
         VStack(alignment: .leading, spacing: 14) {
             allowlistControls
             authHeaderControls
+        }
+        .onAppear {
+            model.loadAuthHeaderSecretIfNeeded()
+        }
+    }
+
+    private var optionsControls: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Startup")
+                    .font(AppTypography.sectionTitle)
+                    .foregroundStyle(.secondary)
+                Toggle("Start routes when routingflare opens", isOn: $model.settings.autoStart)
+                    .onChange(of: model.settings.autoStart) { _, _ in model.saveSettings() }
+            }
             installControls
         }
     }
 
     private var authHeaderControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Toggle("Auth Header", isOn: $model.settings.authHeaderEnabled)
                 .onChange(of: model.settings.authHeaderEnabled) { _, _ in
                     model.saveAuthHeaderSettings()
@@ -1622,163 +2376,13 @@ struct MenuContentView: View {
             .disabled(model.status == .starting || (!model.canStart && (model.status.canStartTunnel || model.requiresRestart)))
             Spacer()
             Button {
-                showsAbout = true
+                model.selectedTab = .about
             } label: {
                 Label("About", systemImage: "info.circle")
             }
             .buttonStyle(.plain)
-            .popover(isPresented: $showsAbout, arrowEdge: .bottom) {
-                aboutPopup
-            }
             Button("Quit", action: model.quit)
         }
-    }
-
-    private var aboutPopup: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Spacer()
-                koFiButton
-                Spacer()
-            }
-            Divider()
-            aboutRow("App", Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "routingflare")
-            versionRow
-            aboutRow("Creator", "Gyumin Hwangbo")
-            projectLinkRow
-            Divider()
-            VStack(alignment: .leading, spacing: 8) {
-                Text(updateSummary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if shouldShowInstallUpdate {
-                    Button(action: model.installUpdate) {
-                        Label("Install and Update", systemImage: "square.and.arrow.down")
-                    }
-                    .disabled(model.updateStatus == .checking || model.updateStatus == .downloading || model.updateStatus == .installing)
-                }
-            }
-            HStack {
-                Spacer()
-                Button("Close") {
-                    showsAbout = false
-                }
-            }
-        }
-        .padding(18)
-        .frame(width: 340)
-    }
-
-    private var koFiButton: some View {
-        Button {
-            model.openKoFiPage()
-        } label: {
-            AsyncImage(url: TunnelBarViewModel.koFiImageURL) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .scaledToFit()
-                case .failure:
-                    Text("Buy Me a Coffee")
-                        .font(.caption.weight(.semibold))
-                case .empty:
-                    ProgressView()
-                        .controlSize(.small)
-                @unknown default:
-                    EmptyView()
-                }
-            }
-            .frame(width: 183, height: 36)
-            .accessibilityLabel("Buy Me a Coffee at ko-fi.com")
-        }
-        .buttonStyle(.borderless)
-    }
-
-    private var versionRow: some View {
-        HStack {
-            Text("Version")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .frame(width: 54, alignment: .leading)
-            Text("\(appVersion) (\(appBuild))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-            Spacer()
-            Button(action: model.checkForUpdates) {
-                Text(model.updateStatus == .checking ? "Checking..." : "Check")
-                    .font(.caption.weight(.semibold))
-            }
-            .disabled(model.updateStatus == .checking || model.updateStatus == .downloading || model.updateStatus == .installing)
-        }
-    }
-
-    private var projectLinkRow: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text("Project")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .frame(width: 54, alignment: .leading)
-            Link(TunnelBarViewModel.projectPageURL.absoluteString, destination: TunnelBarViewModel.projectPageURL)
-                .font(.caption)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer()
-        }
-    }
-
-    private var updateSummary: String {
-        switch model.updateStatus {
-        case .idle:
-            return "Current version: \(appVersion)"
-        case .checking:
-            return "Checking for updates. Current version: \(appVersion)"
-        case .available(let version):
-            return "New version available: \(version). Current version: \(appVersion)."
-        case .current:
-            return "Up to date. Current version: \(appVersion)."
-        case .failed(let message):
-            return "Update check failed. Current version: \(appVersion). \(message)"
-        case .downloading:
-            return "Downloading update. Current version: \(appVersion)."
-        case .installing:
-            return "Installing update. routingflare will restart automatically."
-        case .downloaded:
-            return "Update downloaded. Open the DMG to install."
-        }
-    }
-
-    private var shouldShowInstallUpdate: Bool {
-        switch model.updateStatus {
-        case .available, .downloaded:
-            return true
-        case .idle, .checking, .current, .failed, .downloading, .installing:
-            return false
-        }
-    }
-
-    private func aboutRow(_ title: String, _ value: String) -> some View {
-        HStack {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .frame(width: 54, alignment: .leading)
-            Text(value)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-            Spacer()
-        }
-    }
-
-    private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0.0"
-    }
-
-    private var appBuild: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "-"
     }
 
     @ViewBuilder
@@ -1804,9 +2408,7 @@ struct MenuContentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
-            .frame(height: 120)
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .frame(minHeight: 320)
         }
     }
 }
@@ -1823,49 +2425,67 @@ private struct RoutesTableView: View {
     let quickRouteIsPending: (LocalProxyRoute) -> Bool
     let removeQuickRoute: (LocalProxyRoute) -> Void
     let removeDNSRoute: (LocalProxyRoute) -> Void
+    let tableHeight: CGFloat
 
-    private let statusColumnWidth: CGFloat = 14
-    private let targetColumnWidth: CGFloat = 108
-    private let actionColumnWidth: CGFloat = 22
-    private let columnSpacing: CGFloat = 8
-    private let tableInset: CGFloat = 8
+    private let statusColumnWidth: CGFloat = 16
+    private let targetColumnWidth: CGFloat = 148
+    private let actionColumnWidth: CGFloat = 28
+    private let columnSpacing: CGFloat = 12
+    private let tableInset: CGFloat = 10
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             tableHeader
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(quickRoutes, id: \.self) { route in
-                        routeRow(
-                            from: quickRouteFrom(route),
-                            port: route.targetPort,
-                            isActive: runningModes.contains(.quickURL),
-                            isPending: quickRouteIsPending(route),
-                            statusText: nil,
-                            remove: { removeQuickRoute(route) }
-                        )
-                    }
+                    if quickRoutes.isEmpty && dnsRoutes.isEmpty {
+                        emptyState
+                    } else {
+                        ForEach(quickRoutes, id: \.self) { route in
+                            routeRow(
+                                from: quickRouteFrom(route),
+                                port: route.targetPort,
+                                isActive: runningModes.contains(.quickURL),
+                                isPending: quickRouteIsPending(route),
+                                statusText: nil,
+                                remove: { removeQuickRoute(route) }
+                            )
+                        }
 
-                    ForEach(dnsRoutes, id: \.self) { route in
-                        routeRow(
-                            from: "\(route.hostname)\(displayPath(route.targetPath))",
-                            port: route.targetPort,
-                            isActive: runningModes.contains(.dns),
-                            isPending: dnsUnavailableReason != nil,
-                            statusText: runningModes.contains(.dns) ? nil : dnsUnavailableReason,
-                            remove: { removeDNSRoute(route) }
-                        )
+                        ForEach(dnsRoutes, id: \.self) { route in
+                            routeRow(
+                                from: "\(route.hostname)\(displayPath(route.targetPath))",
+                                port: route.targetPort,
+                                isActive: runningModes.contains(.dns),
+                                isPending: dnsUnavailableReason != nil,
+                                statusText: runningModes.contains(.dns) ? nil : dnsUnavailableReason,
+                                remove: { removeDNSRoute(route) }
+                            )
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(height: 86)
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .frame(height: tableHeight)
         }
         .onDisappear {
             hideTooltip()
         }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text("No routes yet")
+                .font(AppTypography.sectionTitle)
+            Text("Add a random DNS route or DNS route.")
+                .font(AppTypography.content)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: max(86, tableHeight - 8))
     }
 
     private var tableHeader: some View {
@@ -1873,11 +2493,11 @@ private struct RoutesTableView: View {
             Text("")
                 .frame(width: statusColumnWidth)
             Text("From")
-                .font(.caption2)
+                .font(AppTypography.contentStrong)
                 .foregroundStyle(.tertiary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Text("To")
-                .font(.caption2)
+                .font(AppTypography.contentStrong)
                 .foregroundStyle(.tertiary)
                 .frame(width: targetColumnWidth, alignment: .leading)
             Text("")
@@ -1898,7 +2518,7 @@ private struct RoutesTableView: View {
         return HStack(spacing: columnSpacing) {
             Circle()
                 .fill(routeDotColor(isActive: isActive, isPending: isPending))
-                .frame(width: 7, height: 7)
+                .frame(width: 8, height: 8)
                 .frame(width: statusColumnWidth)
             VStack(alignment: .leading, spacing: 2) {
                 copyableText(from, width: nil, truncationMode: .middle)
@@ -1907,7 +2527,7 @@ private struct RoutesTableView: View {
                         statusText,
                         width: nil,
                         truncationMode: .tail,
-                        font: .caption2,
+                        font: .caption,
                         foregroundStyle: .orange,
                         copyable: false
                     )
@@ -1917,11 +2537,12 @@ private struct RoutesTableView: View {
             copyableText(target, width: targetColumnWidth, truncationMode: .tail)
             Button(action: remove) {
                 Image(systemName: "minus.circle")
+                    .font(AppTypography.content)
             }
             .buttonStyle(.plain)
-            .frame(width: actionColumnWidth, height: 22)
+            .frame(width: actionColumnWidth, height: 28)
         }
-        .frame(height: 43)
+        .frame(height: 52)
         .padding(.horizontal, tableInset)
     }
 
@@ -1930,7 +2551,7 @@ private struct RoutesTableView: View {
             value,
             width: width,
             truncationMode: truncationMode,
-            font: .caption,
+            font: AppTypography.contentStrong,
             foregroundStyle: .secondary,
             copyable: true
         )

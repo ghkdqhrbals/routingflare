@@ -9,6 +9,7 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(settings.targetPaths, ["/"])
         XCTAssertEqual(settings.dnsTargetPort, 3000)
         XCTAssertEqual(settings.dnsTargetPaths, ["/"])
+        XCTAssertFalse(settings.autoStart)
     }
 
     func testDecodingLegacySettingsCopiesExistingLocalRouteToDNSDefaults() throws {
@@ -29,5 +30,17 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(settings.dnsTargetPort, 8989)
         XCTAssertEqual(settings.dnsTargetPaths, ["/console/index.html", "/console/admin.html"])
         XCTAssertEqual(settings.dnsHostnames, ["lowfidev.cloud"])
+        XCTAssertFalse(settings.autoStart)
+    }
+
+    func testAutoStartRoundTrip() throws {
+        let settings = AppSettings(
+            autoStart: true
+        )
+
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
+
+        XCTAssertTrue(decoded.autoStart)
     }
 }

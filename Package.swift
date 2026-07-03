@@ -8,11 +8,16 @@ let package = Package(
     ],
     products: [
         .executable(name: "TunnelBar", targets: ["TunnelBar"]),
+        .executable(name: "routingflare", targets: ["RoutingFlareCLI"]),
         .library(name: "TunnelBarCore", targets: ["TunnelBarCore"])
     ],
     targets: [
         .executableTarget(
             name: "TunnelBar",
+            dependencies: ["TunnelBarCore"]
+        ),
+        .executableTarget(
+            name: "RoutingFlareCLI",
             dependencies: ["TunnelBarCore"]
         ),
         .target(

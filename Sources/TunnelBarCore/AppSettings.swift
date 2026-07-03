@@ -1,5 +1,16 @@
 import Foundation
 
+public enum RoutingFlareDefaults {
+    public static let suiteName = "dev.local.routingflare"
+    public static let settingsKey = "TunnelBar.settings"
+    public static let pendingCommandKey = "routingflare.pendingCommand"
+    public static let commandNotificationName = "dev.local.routingflare.command"
+
+    public static func userDefaults() -> UserDefaults {
+        UserDefaults(suiteName: suiteName) ?? .standard
+    }
+}
+
 public enum TunnelMode: String, CaseIterable, Codable, Identifiable {
     case quickURL
     case dns
@@ -35,6 +46,7 @@ public struct AppSettings: Codable, Equatable {
     public var allowlistEntries: [String]
     public var authHeaderEnabled: Bool
     public var authHeaderName: String
+    public var autoStart: Bool
 
     public init(
         targetPort: Int = 3000,
@@ -54,7 +66,8 @@ public struct AppSettings: Codable, Equatable {
         cloudflaredPath: String = "",
         allowlistEntries: [String] = [],
         authHeaderEnabled: Bool = false,
-        authHeaderName: String = "X-Routingflare-Secret"
+        authHeaderName: String = "X-Routingflare-Secret",
+        autoStart: Bool = false
     ) {
         self.targetPort = targetPort
         self.recentPorts = recentPorts
@@ -74,6 +87,7 @@ public struct AppSettings: Codable, Equatable {
         self.allowlistEntries = allowlistEntries
         self.authHeaderEnabled = authHeaderEnabled
         self.authHeaderName = authHeaderName
+        self.autoStart = autoStart
     }
 
     enum CodingKeys: String, CodingKey {
@@ -95,6 +109,7 @@ public struct AppSettings: Codable, Equatable {
         case allowlistEntries
         case authHeaderEnabled
         case authHeaderName
+        case autoStart
     }
 
     public init(from decoder: Decoder) throws {
@@ -139,6 +154,7 @@ public struct AppSettings: Codable, Equatable {
         self.allowlistEntries = try container.decodeIfPresent([String].self, forKey: .allowlistEntries) ?? []
         self.authHeaderEnabled = try container.decodeIfPresent(Bool.self, forKey: .authHeaderEnabled) ?? false
         self.authHeaderName = try container.decodeIfPresent(String.self, forKey: .authHeaderName) ?? "X-Routingflare-Secret"
+        self.autoStart = try container.decodeIfPresent(Bool.self, forKey: .autoStart) ?? false
     }
 }
 
@@ -151,7 +167,7 @@ public final class UserDefaultsSettingsStore: SettingsStoring {
     private let defaults: UserDefaults
     private let key: String
 
-    public init(defaults: UserDefaults = .standard, key: String = "TunnelBar.settings") {
+    public init(defaults: UserDefaults = RoutingFlareDefaults.userDefaults(), key: String = RoutingFlareDefaults.settingsKey) {
         self.defaults = defaults
         self.key = key
     }
