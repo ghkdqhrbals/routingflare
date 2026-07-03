@@ -45,6 +45,13 @@ if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
     --force \
     --timestamp \
     --options runtime \
+    --sign "$CODESIGN_IDENTITY" \
+    "$MACOS_DIR/$CLI_PRODUCT_NAME"
+
+  codesign \
+    --force \
+    --timestamp \
+    --options runtime \
     --entitlements "$ROOT_DIR/Resources/TunnelBar.entitlements" \
     --sign "$CODESIGN_IDENTITY" \
     "$APP_DIR"
