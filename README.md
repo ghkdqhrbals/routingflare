@@ -77,7 +77,7 @@ routingflare add dns --host dev.example.com --port 8080 --path /console
 
 ## Screenshots
 
-![DNS routes](docs/assets/routingflare-dns-live.png)
+![Menu bar routes](docs/assets/routingflare-dns-live.png)
 
 ![Security](docs/assets/routingflare-security-live.png)
 
