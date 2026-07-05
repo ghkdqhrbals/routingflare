@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import TunnelBarCore
 
 enum CLIError: Error, LocalizedError {
@@ -14,9 +15,8 @@ enum CLIError: Error, LocalizedError {
 
 struct RoutingFlareCLI {
     private let store = UserDefaultsSettingsStore()
-    private let secretStore = KeychainStore()
+    private let routeStatusStore = UserDefaultsRouteStatusStore()
     private let releaseAPIURL = URL(string: "https://api.github.com/repos/ghkdqhrbals/routingflare/releases/latest")!
-    private let authHeaderSecretAccount = "routingflare.authHeaderSecret"
 
     func run(_ arguments: [String]) throws {
         let command = Array(arguments.dropFirst())
@@ -172,7 +172,6 @@ struct RoutingFlareCLI {
 
     private func printSettings() {
         let settings = store.load()
-        let authSecret = secretStore.read(account: authHeaderSecretAccount)
 
         print("Settings")
         print("  autostart: \(settings.autoStart ? "on" : "off")")
@@ -182,7 +181,7 @@ struct RoutingFlareCLI {
         print("  allowlist: \(settings.allowlistEntries.isEmpty ? "allow all" : settings.allowlistEntries.joined(separator: ", "))")
         print("  auth header: \(settings.authHeaderEnabled ? "on" : "off")")
         print("  auth header name: \(settings.authHeaderName)")
-        print("  auth secret: \(authSecret?.isEmpty == false ? "set" : "not set")")
+        print("  auth secret: \(settings.authHeaderSecret.isEmpty ? "not set" : "set")")
     }
 
     private func setSettings(_ arguments: [String]) throws {
@@ -276,11 +275,7 @@ struct RoutingFlareCLI {
             settings.authHeaderName = name
         }
         if let secret = options["secret"] {
-            if secret.isEmpty {
-                try secretStore.delete(account: authHeaderSecretAccount)
-            } else {
-                try secretStore.write(secret, account: authHeaderSecretAccount)
-            }
+            settings.authHeaderSecret = secret
         }
 
         store.save(settings)
@@ -290,15 +285,21 @@ struct RoutingFlareCLI {
 
     private func printList() {
         let settings = store.load()
+        let snapshot = liveRouteStatusSnapshot()
 
         print("Random DNS")
         printRoutes(settings.quickRoutes, from: { route in
-            "random dns\(route.normalizedTargetPath == "/" ? "" : route.normalizedTargetPath) to 127.0.0.1:\(route.targetPort)"
+            let normalized = normalizedRoute(route, kind: .quickURL)
+            let entry = statusEntry(for: normalized, kind: .quickURL, snapshot: snapshot)
+            let from = entry?.publicURL.flatMap { URL(string: $0)?.host } ?? "random dns"
+            return "\(from)\(normalized.normalizedTargetPath == "/" ? "" : normalized.normalizedTargetPath) to 127.0.0.1:\(normalized.targetPort)\(statusSuffix(for: entry))"
         })
 
         print("\nDNS")
         printRoutes(settings.dnsRoutes, from: { route in
-            "\(route.hostname)\(route.normalizedTargetPath == "/" ? "" : route.normalizedTargetPath) -> 127.0.0.1:\(route.targetPort)"
+            let normalized = normalizedRoute(route, kind: .dns)
+            let entry = statusEntry(for: normalized, kind: .dns, snapshot: snapshot)
+            return "\(normalized.hostname)\(normalized.normalizedTargetPath == "/" ? "" : normalized.normalizedTargetPath) -> 127.0.0.1:\(normalized.targetPort)\(statusSuffix(for: entry))"
         })
 
         print("\nOptions")
@@ -433,6 +434,54 @@ struct RoutingFlareCLI {
         for (index, route) in routes.enumerated() {
             print("  \(index + 1). \(title(route))")
         }
+    }
+
+    private func liveRouteStatusSnapshot() -> RouteStatusSnapshot? {
+        guard let snapshot = routeStatusStore.load(),
+              snapshot.appPID > 0,
+              kill(snapshot.appPID, 0) == 0 else {
+            return nil
+        }
+        return snapshot
+    }
+
+    private func statusEntry(
+        for route: LocalProxyRoute,
+        kind: TunnelMode,
+        snapshot: RouteStatusSnapshot?
+    ) -> RouteStatusEntry? {
+        snapshot?.entries.first { $0.kind == kind && $0.route == route }
+    }
+
+    private func statusSuffix(for entry: RouteStatusEntry?) -> String {
+        guard let entry else { return "" }
+        switch entry.state {
+        case .opened:
+            return " [opened]"
+        case .pending:
+            return " [pending\(messageSuffix(entry.message))]"
+        case .stopped:
+            return " [stopped]"
+        case .restartRequired:
+            return " [restart required]"
+        case .error:
+            return " [error\(messageSuffix(entry.message))]"
+        }
+    }
+
+    private func messageSuffix(_ message: String?) -> String {
+        guard let message = message?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty else {
+            return ""
+        }
+        return ": \(message)"
+    }
+
+    private func normalizedRoute(_ route: LocalProxyRoute, kind: TunnelMode) -> LocalProxyRoute {
+        LocalProxyRoute(
+            hostname: kind == .quickURL ? "" : route.hostname.trimmingCharacters(in: .whitespacesAndNewlines),
+            targetPort: route.targetPort,
+            targetPath: normalizedPath(route.targetPath)
+        )
     }
 
     private func sendAppCommand(_ command: String) {

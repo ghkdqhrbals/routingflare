@@ -35,6 +35,10 @@ private final class RoutingFlareLaunchDelegate: NSObject, NSApplicationDelegate 
     func applicationDidFinishLaunching(_ notification: Notification) {
         RoutingFlareWindowPresenter.shared.show(model: RoutingFlareRuntime.shared.model)
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        RoutingFlareRuntime.shared.model.clearRouteStatusSnapshot()
+    }
 }
 
 enum TunnelStatus: Equatable {
@@ -278,7 +282,7 @@ final class TunnelBarViewModel: ObservableObject {
     @Published private var dnsCloudflaredIssue: String?
 
     private let settingsStore: SettingsStoring
-    private let secretStore: SecretStoring
+    private let routeStatusStore: RouteStatusStoring
     private let tunnelProcess = TunnelProcess()
     private let accessPolicy: MutableProxyAccessPolicy
     private var proxy: LocalFilteringProxy?
@@ -286,8 +290,6 @@ final class TunnelBarViewModel: ObservableObject {
     private var cliCommandObserver: NSObjectProtocol?
     private var cloudflaredConfigURL: URL?
     private var activeTunnelModes: Set<TunnelMode> = []
-    private var authHeaderSecretLoaded = false
-    private static let authHeaderSecretAccount = "routingflare.authHeaderSecret"
     private static let releaseAPIURL = URL(string: "https://api.github.com/repos/ghkdqhrbals/routingflare/releases/latest")!
     static let projectPageURL = URL(string: "https://ghkdqhrbals.github.io/routingflare/")!
     static let releasesURL = URL(string: "https://github.com/ghkdqhrbals/routingflare/releases/latest")!
@@ -297,10 +299,10 @@ final class TunnelBarViewModel: ObservableObject {
 
     init(
         settingsStore: SettingsStoring = UserDefaultsSettingsStore(),
-        secretStore: SecretStoring = KeychainStore()
+        routeStatusStore: RouteStatusStoring = UserDefaultsRouteStatusStore()
     ) {
         self.settingsStore = settingsStore
-        self.secretStore = secretStore
+        self.routeStatusStore = routeStatusStore
         var loaded = settingsStore.load()
             if loaded.cloudflaredPath.isEmpty,
            let detected = CloudflaredLocator().find() {
@@ -337,12 +339,13 @@ final class TunnelBarViewModel: ObservableObject {
         self.newQuickPortText = String(loaded.targetPort)
         self.selectedTab = .routes
         self.settings = loaded
+        self.authHeaderSecret = loaded.authHeaderSecret
         self.accessPolicy = MutableProxyAccessPolicy(
             allowlistEntries: loaded.allowlistEntries,
             authHeader: Self.authHeader(
                 enabled: loaded.authHeaderEnabled,
                 name: loaded.authHeaderName,
-                secret: ""
+                secret: loaded.authHeaderSecret
             )
         )
         setupCLICommandObserver()
@@ -354,6 +357,7 @@ final class TunnelBarViewModel: ObservableObject {
                 self.start()
             }
         }
+        saveRouteStatusSnapshot()
     }
 
     var canStart: Bool {
@@ -413,6 +417,105 @@ final class TunnelBarViewModel: ObservableObject {
     func saveSettings() {
         normalizeLists()
         settingsStore.save(settings)
+        saveRouteStatusSnapshot()
+    }
+
+    func clearRouteStatusSnapshot() {
+        routeStatusStore.clear()
+    }
+
+    private func saveRouteStatusSnapshot() {
+        let entries = activeQuickRoutes.map { route in
+            RouteStatusEntry(
+                route: route,
+                kind: .quickURL,
+                state: quickRouteRuntimeState(route),
+                publicURL: quickPublicURLs[route]?.absoluteString,
+                message: quickRouteRuntimeMessage(route)
+            )
+        } + activeDNSRoutes.map { route in
+            RouteStatusEntry(
+                route: route,
+                kind: .dns,
+                state: dnsRouteRuntimeState,
+                publicURL: dnsPublicURL(for: route)?.absoluteString,
+                message: dnsRouteRuntimeMessage
+            )
+        }
+        routeStatusStore.save(
+            RouteStatusSnapshot(
+                appPID: ProcessInfo.processInfo.processIdentifier,
+                entries: entries
+            )
+        )
+    }
+
+    private func quickRouteRuntimeState(_ route: LocalProxyRoute) -> RouteRuntimeState {
+        if requiresRestart {
+            return .restartRequired
+        }
+        if quickRouteIsPending(route) {
+            return .pending
+        }
+        if quickPublicURLs[route] != nil && status.isStarted {
+            return .opened
+        }
+        if case .error = status {
+            return .error
+        }
+        return .stopped
+    }
+
+    private func quickRouteRuntimeMessage(_ route: LocalProxyRoute) -> String? {
+        if quickRouteIsPending(route) {
+            return "Fetching URL"
+        }
+        if case .error(let message) = status {
+            return message
+        }
+        return nil
+    }
+
+    private var dnsRouteRuntimeState: RouteRuntimeState {
+        if let dnsCloudflaredIssue, !dnsCloudflaredIssue.isEmpty {
+            return .error
+        }
+        if requiresRestart {
+            return .restartRequired
+        }
+        if status == .starting && !activeDNSRoutes.isEmpty {
+            return .pending
+        }
+        if activeTunnelModes.contains(.dns), status.isStarted {
+            return .opened
+        }
+        if case .error = status {
+            return .error
+        }
+        return .stopped
+    }
+
+    private var dnsRouteRuntimeMessage: String? {
+        if let dnsCloudflaredIssue, !dnsCloudflaredIssue.isEmpty {
+            return dnsCloudflaredIssue
+        }
+        if status == .starting && !activeDNSRoutes.isEmpty {
+            return "Starting"
+        }
+        if case .error(let message) = status {
+            return message
+        }
+        return nil
+    }
+
+    private func dnsPublicURL(for route: LocalProxyRoute) -> URL? {
+        guard activeTunnelModes.contains(.dns), dnsCloudflaredIssue == nil else {
+            return nil
+        }
+        guard let baseURL = URL(string: "https://\(route.hostname)") else {
+            return nil
+        }
+        return PublicURLBuilder.build(baseURL: baseURL, targetPath: route.targetPath)
     }
 
     func selectTab(_ tab: AppTab) {
@@ -474,8 +577,10 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func reloadSettingsFromStore() {
+        defer { saveRouteStatusSnapshot() }
         let wasStarted = status.isStarted
         settings = settingsStore.load()
+        authHeaderSecret = settings.authHeaderSecret
         newDNSPortText = String(settings.dnsTargetPort)
         newQuickPortText = String(settings.targetPort)
         updateAccessPolicy()
@@ -562,8 +667,8 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     func start() {
+        defer { saveRouteStatusSnapshot() }
         saveSettings()
-        loadAuthHeaderSecretIfNeeded()
         updateAccessPolicy()
         publicURL = nil
         quickPublicURLs = [:]
@@ -614,6 +719,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func startDNSTunnel() throws {
+            defer { saveRouteStatusSnapshot() }
             dnsCloudflaredIssue = nil
             let proxy: LocalFilteringProxy
             let logHandler: @Sendable (String) -> Void = { [weak self] line in
@@ -671,6 +777,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func startQuickTunnel(_ route: LocalProxyRoute) throws {
+        defer { saveRouteStatusSnapshot() }
         guard !quickSessions.contains(where: { $0.route == route }) else { return }
         let proxy = LocalFilteringProxy(
             routes: [route],
@@ -716,6 +823,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     func stop() {
+        defer { saveRouteStatusSnapshot() }
         tunnelProcess.stop()
         proxy?.stop()
         proxy = nil
@@ -760,25 +868,14 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     func saveAuthHeaderSettings() {
-        authHeaderSecretLoaded = true
         settings.authHeaderName = normalizedAuthHeaderName
-        if authHeaderSecret.isEmpty {
-            try? secretStore.delete(account: Self.authHeaderSecretAccount)
-        } else {
-            do {
-                try secretStore.write(authHeaderSecret, account: Self.authHeaderSecretAccount)
-            } catch {
-                appendLog("Auth header secret save failed: \(error.localizedDescription)")
-            }
-        }
+        settings.authHeaderSecret = authHeaderSecret
         updateAccessPolicy()
         saveSettings()
     }
 
     func loadAuthHeaderSecretIfNeeded() {
-        guard !authHeaderSecretLoaded else { return }
-        authHeaderSecret = secretStore.read(account: Self.authHeaderSecretAccount) ?? ""
-        authHeaderSecretLoaded = true
+        authHeaderSecret = settings.authHeaderSecret
     }
 
     @discardableResult
@@ -1104,6 +1201,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func handleTunnelOutput(_ output: String) {
+        defer { saveRouteStatusSnapshot() }
         let issue = cloudflaredIssue(from: output, previousLog: logs.last)
         appendLog(output)
         if let issue {
@@ -1124,6 +1222,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func handleQuickTunnelOutput(_ output: String, route: LocalProxyRoute) {
+        defer { saveRouteStatusSnapshot() }
         appendLog(output)
         if let parsedURL = TunnelURLParser.parsePublicURL(from: output),
            let routedURL = PublicURLBuilder.build(baseURL: parsedURL, targetPath: route.targetPath) {
@@ -1135,6 +1234,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func handleTunnelExit(mode: TunnelMode, statusCode: Int32) {
+        defer { saveRouteStatusSnapshot() }
         guard status != .stopped else { return }
         activeTunnelModes.remove(mode)
         if statusCode != 0 {
@@ -1152,6 +1252,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func handleQuickTunnelExit(route: LocalProxyRoute, statusCode: Int32) {
+        defer { saveRouteStatusSnapshot() }
         guard status != .stopped else { return }
         if let index = quickSessions.firstIndex(where: { $0.route == route }) {
             let session = quickSessions.remove(at: index)
@@ -1173,6 +1274,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func startQuickRouteIfNeeded(_ route: LocalProxyRoute) {
+        defer { saveRouteStatusSnapshot() }
         guard status.isStarted else { return }
         do {
             try startQuickTunnel(normalizedRoute(route, wildcardHost: true))
@@ -1184,6 +1286,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func stopQuickRouteSession(_ route: LocalProxyRoute) {
+        defer { saveRouteStatusSnapshot() }
         let normalized = normalizedRoute(route, wildcardHost: true)
         quickPublicURLs[normalized] = nil
         if let index = quickSessions.firstIndex(where: { $0.route == normalized }) {
@@ -1200,6 +1303,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func refreshDNSTunnelIfNeeded() {
+        defer { saveRouteStatusSnapshot() }
         guard status.isStarted else { return }
         stopDNSTunnelOnly()
         guard canStartDNS else {
@@ -1219,6 +1323,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func applyDNSFailure(_ issue: String) {
+        defer { saveRouteStatusSnapshot() }
         dnsCloudflaredIssue = issue
         activeTunnelModes.remove(.dns)
         if activeTunnelModes.contains(.quickURL) || !quickSessions.isEmpty {
@@ -1230,6 +1335,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func stopDNSTunnelOnly() {
+        defer { saveRouteStatusSnapshot() }
         tunnelProcess.stop()
         proxy?.stop()
         proxy = nil
@@ -1250,7 +1356,7 @@ final class TunnelBarViewModel: ObservableObject {
         Self.authHeader(
             enabled: settings.authHeaderEnabled,
             name: normalizedAuthHeaderName,
-            secret: authHeaderSecret
+            secret: settings.authHeaderSecret
         )
     }
 

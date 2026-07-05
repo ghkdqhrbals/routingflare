@@ -117,14 +117,6 @@ routingflare add dns --host dev.example.com --port 8080 --path /console
 
 ![Security](docs/assets/routingflare-security-live.png)
 
-## Development
-
-```bash
-swift test --scratch-path .build
-swift run TunnelBar
-swift run routingflare help
-```
-
 ## License
 
 routingflare is proprietary, non-commercial software. Use, redistribution, and

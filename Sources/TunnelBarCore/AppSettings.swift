@@ -3,6 +3,7 @@ import Foundation
 public enum RoutingFlareDefaults {
     public static let suiteName = "dev.local.routingflare"
     public static let settingsKey = "TunnelBar.settings"
+    public static let routeStatusSnapshotKey = "routingflare.routeStatusSnapshot"
     public static let pendingCommandKey = "routingflare.pendingCommand"
     public static let commandNotificationName = "dev.local.routingflare.command"
 
@@ -46,6 +47,7 @@ public struct AppSettings: Codable, Equatable {
     public var allowlistEntries: [String]
     public var authHeaderEnabled: Bool
     public var authHeaderName: String
+    public var authHeaderSecret: String
     public var autoStart: Bool
 
     public init(
@@ -67,6 +69,7 @@ public struct AppSettings: Codable, Equatable {
         allowlistEntries: [String] = [],
         authHeaderEnabled: Bool = false,
         authHeaderName: String = "X-Routingflare-Secret",
+        authHeaderSecret: String = "",
         autoStart: Bool = false
     ) {
         self.targetPort = targetPort
@@ -87,6 +90,7 @@ public struct AppSettings: Codable, Equatable {
         self.allowlistEntries = allowlistEntries
         self.authHeaderEnabled = authHeaderEnabled
         self.authHeaderName = authHeaderName
+        self.authHeaderSecret = authHeaderSecret
         self.autoStart = autoStart
     }
 
@@ -109,6 +113,7 @@ public struct AppSettings: Codable, Equatable {
         case allowlistEntries
         case authHeaderEnabled
         case authHeaderName
+        case authHeaderSecret
         case autoStart
     }
 
@@ -154,6 +159,7 @@ public struct AppSettings: Codable, Equatable {
         self.allowlistEntries = try container.decodeIfPresent([String].self, forKey: .allowlistEntries) ?? []
         self.authHeaderEnabled = try container.decodeIfPresent(Bool.self, forKey: .authHeaderEnabled) ?? false
         self.authHeaderName = try container.decodeIfPresent(String.self, forKey: .authHeaderName) ?? "X-Routingflare-Secret"
+        self.authHeaderSecret = try container.decodeIfPresent(String.self, forKey: .authHeaderSecret) ?? ""
         self.autoStart = try container.decodeIfPresent(Bool.self, forKey: .autoStart) ?? false
     }
 }
@@ -185,5 +191,81 @@ public final class UserDefaultsSettingsStore: SettingsStoring {
             return
         }
         defaults.set(data, forKey: key)
+    }
+}
+
+public enum RouteRuntimeState: String, Codable, Equatable {
+    case opened
+    case pending
+    case stopped
+    case restartRequired
+    case error
+}
+
+public struct RouteStatusEntry: Codable, Equatable {
+    public let route: LocalProxyRoute
+    public let kind: TunnelMode
+    public let state: RouteRuntimeState
+    public let publicURL: String?
+    public let message: String?
+
+    public init(
+        route: LocalProxyRoute,
+        kind: TunnelMode,
+        state: RouteRuntimeState,
+        publicURL: String? = nil,
+        message: String? = nil
+    ) {
+        self.route = route
+        self.kind = kind
+        self.state = state
+        self.publicURL = publicURL
+        self.message = message
+    }
+}
+
+public struct RouteStatusSnapshot: Codable, Equatable {
+    public let appPID: Int32
+    public let updatedAt: Date
+    public let entries: [RouteStatusEntry]
+
+    public init(appPID: Int32, updatedAt: Date = Date(), entries: [RouteStatusEntry]) {
+        self.appPID = appPID
+        self.updatedAt = updatedAt
+        self.entries = entries
+    }
+}
+
+public protocol RouteStatusStoring {
+    func load() -> RouteStatusSnapshot?
+    func save(_ snapshot: RouteStatusSnapshot)
+    func clear()
+}
+
+public final class UserDefaultsRouteStatusStore: RouteStatusStoring {
+    private let defaults: UserDefaults
+    private let key: String
+
+    public init(defaults: UserDefaults = RoutingFlareDefaults.userDefaults(), key: String = RoutingFlareDefaults.routeStatusSnapshotKey) {
+        self.defaults = defaults
+        self.key = key
+    }
+
+    public func load() -> RouteStatusSnapshot? {
+        guard let data = defaults.data(forKey: key) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(RouteStatusSnapshot.self, from: data)
+    }
+
+    public func save(_ snapshot: RouteStatusSnapshot) {
+        guard let data = try? JSONEncoder().encode(snapshot) else {
+            return
+        }
+        defaults.set(data, forKey: key)
+    }
+
+    public func clear() {
+        defaults.removeObject(forKey: key)
     }
 }

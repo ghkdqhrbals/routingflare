@@ -43,4 +43,19 @@ final class AppSettingsTests: XCTestCase {
 
         XCTAssertTrue(decoded.autoStart)
     }
+
+    func testAuthHeaderSecretRoundTripWithoutKeychain() throws {
+        let settings = AppSettings(
+            authHeaderEnabled: true,
+            authHeaderName: "X-Test-Secret",
+            authHeaderSecret: "local-secret"
+        )
+
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
+
+        XCTAssertTrue(decoded.authHeaderEnabled)
+        XCTAssertEqual(decoded.authHeaderName, "X-Test-Secret")
+        XCTAssertEqual(decoded.authHeaderSecret, "local-secret")
+    }
 }
