@@ -8,6 +8,26 @@ routingflare is a tiny macOS app for Cloudflare Tunnel. Use Random DNS for an in
 
 ![routingflare](docs/assets/routingflare-hero.png)
 
+## Install
+
+Terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ghkdqhrbals/routingflare/main/scripts/install.sh | bash
+```
+
+Install from ZIP instead of DMG:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ghkdqhrbals/routingflare/main/scripts/install.sh | bash -s -- --zip
+```
+
+Manual install:
+
+- Download the latest DMG or ZIP from [Releases](https://github.com/ghkdqhrbals/routingflare/releases/latest).
+- Move `routingflare.app` to `/Applications`.
+- Open routingflare once to install the CLI automatically.
+
 ## Features
 
 - Random DNS: expose a local port with a temporary public URL.
@@ -19,20 +39,29 @@ routingflare is a tiny macOS app for Cloudflare Tunnel. Use Random DNS for an in
 
 ## CLI
 
-The DMG includes a CLI binary inside the app bundle:
+routingflare installs its CLI automatically when the app opens:
+
+- `~/.local/bin/routingflare` points to the CLI inside the app bundle.
+- `~/.local/bin` is added to `~/.zshrc` if it is missing.
+
+After the first app launch, open a new terminal or run:
+
+```bash
+source ~/.zshrc
+```
+
+The bundled CLI is also available directly at:
 
 ```bash
 /Applications/routingflare.app/Contents/MacOS/routingflare
 ```
 
-Optional shell install:
+Manual fallback:
 
 ```bash
 mkdir -p ~/.local/bin
 ln -sf /Applications/routingflare.app/Contents/MacOS/routingflare ~/.local/bin/routingflare
 ```
-
-Make sure `~/.local/bin` is in your `PATH`.
 
 ### Common Commands
 
@@ -47,6 +76,7 @@ routingflare start
 routingflare stop
 routingflare open
 routingflare settings
+routingflare update
 ```
 
 ### Options
@@ -60,6 +90,7 @@ routingflare cloudflared /opt/homebrew/bin/cloudflared
 ### How The CLI Works
 
 The CLI writes routingflare settings to the same local preferences used by the app, then sends the running app a reload/start/stop/open command. If the app is not open, `start`, `open`, and `settings` try to launch it automatically.
+`routingflare update` runs entirely from the terminal. It checks the latest GitHub release, downloads the DMG when a newer version exists, replaces `/Applications/routingflare.app`, and refreshes the CLI symlink.
 
 Examples:
 

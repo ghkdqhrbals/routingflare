@@ -14,6 +14,7 @@ enum CLIError: Error, LocalizedError {
 
 struct RoutingFlareCLI {
     private let store = UserDefaultsSettingsStore()
+    private let releaseAPIURL = URL(string: "https://api.github.com/repos/ghkdqhrbals/routingflare/releases/latest")!
 
     func run(_ arguments: [String]) throws {
         let command = Array(arguments.dropFirst())
@@ -37,6 +38,8 @@ struct RoutingFlareCLI {
                 launchAppIfNeeded()
             }
             print("Sent \(first) to routingflare.")
+        case "update":
+            try updateFromCLI()
         case "autostart":
             try setAutoStart(Array(command.dropFirst()))
         case "cloudflared":
@@ -161,6 +164,123 @@ struct RoutingFlareCLI {
         print("  cloudflared: \(settings.cloudflaredPath.isEmpty ? "auto-detect" : settings.cloudflaredPath)")
     }
 
+    private func updateFromCLI() throws {
+        let appURL = installedAppURL()
+        let currentVersion = installedAppVersion(appURL: appURL) ?? "0"
+        print("Checking for updates...")
+
+        let releaseData = try Data(contentsOf: releaseAPIURL)
+        let release = try JSONDecoder().decode(GitHubRelease.self, from: releaseData)
+        let plan = ReleasePlanner.plan(from: release, currentVersion: currentVersion)
+
+        guard plan.isNewer else {
+            print("routingflare is up to date. Current version: \(currentVersion)")
+            return
+        }
+
+        guard let dmgURL = plan.dmgURL else {
+            if let releaseURL = plan.releaseURL {
+                print("Version \(plan.latestVersion) is available: \(releaseURL.absoluteString)")
+            }
+            throw CLIError.message("No DMG asset found in the latest release.")
+        }
+
+        print("Version \(plan.latestVersion) is available. Current version: \(currentVersion)")
+        let dmgPath = try downloadDMG(from: dmgURL)
+        print("Downloaded \(dmgPath.path)")
+        try installDMG(dmgPath, to: appURL)
+        print("Installed routingflare \(plan.latestVersion) at \(appURL.path)")
+    }
+
+    private func installedAppURL() -> URL {
+        let executableURL = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+        var current = executableURL
+        while current.path != "/" {
+            if current.pathExtension == "app" {
+                return current
+            }
+            current.deleteLastPathComponent()
+        }
+        return URL(fileURLWithPath: "/Applications/routingflare.app", isDirectory: true)
+    }
+
+    private func installedAppVersion(appURL: URL) -> String? {
+        let infoURL = appURL.appendingPathComponent("Contents/Info.plist")
+        guard let plist = NSDictionary(contentsOf: infoURL) else {
+            return nil
+        }
+        return plist["CFBundleShortVersionString"] as? String
+    }
+
+    private func downloadDMG(from url: URL) throws -> URL {
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("routingflare-\(UUID().uuidString).dmg")
+        try runProcess("/usr/bin/curl", ["-fL", url.absoluteString, "-o", destination.path])
+        return destination
+    }
+
+    private func installDMG(_ dmgURL: URL, to appURL: URL) throws {
+        let mountDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("routingflare-update-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: mountDirectory, withIntermediateDirectories: true)
+        defer {
+            try? runProcess("/usr/bin/hdiutil", ["detach", mountDirectory.path, "-quiet"])
+            try? FileManager.default.removeItem(at: mountDirectory)
+        }
+
+        quitRunningApp()
+        try runProcess("/usr/bin/hdiutil", ["attach", "-nobrowse", "-readonly", "-mountpoint", mountDirectory.path, dmgURL.path])
+        let sourceAppURL = try findAppBundle(in: mountDirectory)
+
+        if FileManager.default.fileExists(atPath: appURL.path) {
+            try FileManager.default.removeItem(at: appURL)
+        }
+        try runProcess("/usr/bin/ditto", [sourceAppURL.path, appURL.path])
+        try? runProcess("/usr/bin/xattr", ["-dr", "com.apple.quarantine", appURL.path])
+
+        let executableURL = appURL.appendingPathComponent("Contents/MacOS/routingflare")
+        _ = try CLIInstaller().install(bundledCLIURL: executableURL)
+    }
+
+    private func findAppBundle(in mountDirectory: URL) throws -> URL {
+        let urls = try FileManager.default.contentsOfDirectory(
+            at: mountDirectory,
+            includingPropertiesForKeys: nil
+        )
+        if let appURL = urls.first(where: { $0.pathExtension == "app" }) {
+            return appURL
+        }
+        throw CLIError.message("No app bundle found in DMG.")
+    }
+
+    private func quitRunningApp() {
+        for bundleID in ["com.gyuminhwangbo.RoutingFlare", "dev.local.tunnelbar", "dev.local.routingflare"] {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", #"tell application id "\#(bundleID)" to quit"#]
+            try? process.run()
+            process.waitUntilExit()
+        }
+        Thread.sleep(forTimeInterval: 1)
+    }
+
+    private func runProcess(_ executablePath: String, _ arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw CLIError.message(output.isEmpty ? "\(executablePath) failed with status \(process.terminationStatus)" : output)
+        }
+    }
+
     private func printRoutes<T>(_ routes: [T], from title: (T) -> String) {
         if routes.isEmpty {
             print("  none")
@@ -245,6 +365,7 @@ struct RoutingFlareCLI {
           routingflare stop
           routingflare open
           routingflare settings
+          routingflare update
           routingflare autostart on|off
           routingflare cloudflared /path/to/cloudflared
         """)

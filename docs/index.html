@@ -171,6 +171,38 @@
         background: var(--green);
       }
 
+      .install {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 18px;
+        align-items: center;
+        padding: 18px 0;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .install strong {
+        display: block;
+        font-size: 18px;
+      }
+
+      .install code {
+        display: block;
+        margin-top: 8px;
+        overflow-x: auto;
+        color: var(--muted);
+        font-family: "SFMono-Regular", Consolas, monospace;
+        font-size: 13px;
+        white-space: nowrap;
+      }
+
+      .install-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        justify-content: flex-end;
+      }
+
       .hero-visual {
         position: relative;
       }
@@ -344,9 +376,18 @@
         }
 
         .section-head,
-        .final-cta {
+        .final-cta,
+        .install {
           align-items: start;
           flex-direction: column;
+        }
+
+        .install {
+          grid-template-columns: 1fr;
+        }
+
+        .install-actions {
+          justify-content: flex-start;
         }
 
       }
@@ -409,6 +450,17 @@
             <div class="hero-frame">
               <img src="assets/routingflare-hero.png" alt="routingflare routing window screenshot" />
             </div>
+          </div>
+        </section>
+
+        <section class="install" aria-label="Install routingflare">
+          <div>
+            <strong>Install from Terminal</strong>
+            <code>curl -fsSL https://raw.githubusercontent.com/ghkdqhrbals/routingflare/main/scripts/install.sh | bash</code>
+          </div>
+          <div class="install-actions">
+            <a class="button secondary" id="download-zip" href="https://github.com/ghkdqhrbals/routingflare/releases/latest">Download ZIP</a>
+            <a class="button secondary" href="https://github.com/ghkdqhrbals/routingflare#install">Install guide</a>
           </div>
         </section>
 
@@ -505,11 +557,13 @@
           const version = document.getElementById("version");
           const download = document.getElementById("download");
           const downloadSecondary = document.getElementById("download-secondary");
+          const downloadZip = document.getElementById("download-zip");
           if (release.version) version.textContent = `Version ${release.version}`;
           if (release.dmg_url) {
             download.href = release.dmg_url;
             downloadSecondary.href = release.dmg_url;
           }
+          if (release.zip_url) downloadZip.href = release.zip_url;
         })
         .catch(() => {});
     </script>

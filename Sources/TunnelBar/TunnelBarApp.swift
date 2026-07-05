@@ -227,28 +227,6 @@ private enum RoutingFlareSingleInstance {
     }
 }
 
-private struct GitHubRelease: Decodable {
-    let tagName: String
-    let htmlURL: URL?
-    let assets: [GitHubReleaseAsset]
-
-    enum CodingKeys: String, CodingKey {
-        case tagName = "tag_name"
-        case htmlURL = "html_url"
-        case assets
-    }
-}
-
-private struct GitHubReleaseAsset: Decodable {
-    let name: String
-    let browserDownloadURL: URL
-
-    enum CodingKeys: String, CodingKey {
-        case name
-        case browserDownloadURL = "browser_download_url"
-    }
-}
-
 private final class QuickTunnelSession {
     let route: LocalProxyRoute
     let proxy: LocalFilteringProxy
@@ -369,6 +347,7 @@ final class TunnelBarViewModel: ObservableObject {
         )
         setupCLICommandObserver()
         handlePendingCLICommand()
+        autoInstallCLIIfNeeded()
         autoInstallCloudflaredIfNeeded()
         if loaded.autoStart {
             Task { @MainActor in
@@ -483,6 +462,10 @@ final class TunnelBarViewModel: ObservableObject {
         case "settings":
             selectedTab = .options
             RoutingFlareWindowPresenter.shared.show(model: self)
+        case "update":
+            selectedTab = .about
+            RoutingFlareWindowPresenter.shared.show(model: self)
+            updateFromCLI()
         case "reload":
             reloadSettingsFromStore()
         default:
@@ -516,6 +499,26 @@ final class TunnelBarViewModel: ObservableObject {
 
     func installCloudflaredWithBrew() {
         installCloudflaredWithBrew(automatic: false)
+    }
+
+    private func autoInstallCLIIfNeeded() {
+        let fileManager = FileManager.default
+        guard let executableDirectory = Bundle.main.executableURL?.deletingLastPathComponent() else {
+            return
+        }
+        let bundledCLIURL = executableDirectory.appendingPathComponent("routingflare")
+
+        do {
+            let result = try CLIInstaller(fileManager: fileManager).install(bundledCLIURL: bundledCLIURL)
+            if result.installedOrUpdatedLink {
+                appendLog("CLI installed at ~/.local/bin/routingflare")
+            }
+            if result.addedPathToZshrc {
+                appendLog("Added ~/.local/bin to ~/.zshrc")
+            }
+        } catch {
+            appendLog("CLI install failed: \(error.localizedDescription)")
+        }
     }
 
     private func autoInstallCloudflaredIfNeeded() {
@@ -916,6 +919,16 @@ final class TunnelBarViewModel: ObservableObject {
 
     func checkForUpdates() {
         guard updateStatus != .checking && updateStatus != .downloading && updateStatus != .installing else { return }
+        checkForUpdates(installWhenAvailable: false)
+    }
+
+    func updateFromCLI() {
+        guard updateStatus != .checking && updateStatus != .downloading && updateStatus != .installing else { return }
+        appendLog("CLI requested update check")
+        checkForUpdates(installWhenAvailable: true)
+    }
+
+    private func checkForUpdates(installWhenAvailable: Bool) {
         updateStatus = .checking
 
         Task { [weak self] in
@@ -928,6 +941,13 @@ final class TunnelBarViewModel: ObservableObject {
                 let release = try JSONDecoder().decode(GitHubRelease.self, from: data)
                 await MainActor.run {
                     self?.applyLatestRelease(release)
+                    if installWhenAvailable,
+                       case .available = self?.updateStatus {
+                        self?.installUpdate()
+                    } else if installWhenAvailable,
+                              self?.updateStatus == .current {
+                        self?.appendLog("Update skipped: already up to date")
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -1043,12 +1063,10 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func applyLatestRelease(_ release: GitHubRelease) {
-        let version = release.tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
-        latestUpdateURL = release.assets.first { $0.name.lowercased().hasSuffix(".dmg") }?.browserDownloadURL ??
-            release.htmlURL ??
-            Self.releasesURL
-        if Self.compareVersions(version, currentAppVersion) == .orderedDescending {
-            updateStatus = .available(version: version)
+        let plan = ReleasePlanner.plan(from: release, currentVersion: currentAppVersion)
+        latestUpdateURL = plan.dmgURL ?? plan.releaseURL ?? Self.releasesURL
+        if plan.isNewer {
+            updateStatus = .available(version: plan.latestVersion)
         } else {
             updateStatus = .current
         }
@@ -1076,10 +1094,6 @@ final class TunnelBarViewModel: ObservableObject {
         ).appendingPathComponent("TunnelBar", isDirectory: true)
         try FileManager.default.createDirectory(at: supportDirectory, withIntermediateDirectories: true)
         return supportDirectory
-    }
-
-    private static func compareVersions(_ lhs: String, _ rhs: String) -> ComparisonResult {
-        lhs.compare(rhs, options: .numeric)
     }
 
     private var effectiveCloudflaredPath: String {
