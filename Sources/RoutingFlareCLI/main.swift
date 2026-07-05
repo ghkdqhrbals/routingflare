@@ -14,7 +14,9 @@ enum CLIError: Error, LocalizedError {
 
 struct RoutingFlareCLI {
     private let store = UserDefaultsSettingsStore()
+    private let secretStore = KeychainStore()
     private let releaseAPIURL = URL(string: "https://api.github.com/repos/ghkdqhrbals/routingflare/releases/latest")!
+    private let authHeaderSecretAccount = "routingflare.authHeaderSecret"
 
     func run(_ arguments: [String]) throws {
         let command = Array(arguments.dropFirst())
@@ -32,12 +34,14 @@ struct RoutingFlareCLI {
             try add(Array(command.dropFirst()))
         case "remove", "rm":
             try remove(Array(command.dropFirst()))
-        case "start", "stop", "open", "settings":
+        case "start", "stop":
             sendAppCommand(first)
-            if first == "start" || first == "open" || first == "settings" {
+            if first == "start" {
                 launchAppIfNeeded()
             }
             print("Sent \(first) to routingflare.")
+        case "settings":
+            try settings(Array(command.dropFirst()))
         case "update":
             try updateFromCLI()
         case "autostart":
@@ -146,6 +150,144 @@ struct RoutingFlareCLI {
         print("cloudflared path set to \(path).")
     }
 
+    private func settings(_ arguments: [String]) throws {
+        guard let action = arguments.first else {
+            printSettings()
+            return
+        }
+
+        switch action {
+        case "get", "show", "list":
+            printSettings()
+        case "set":
+            try setSettings(Array(arguments.dropFirst()))
+        case "allowlist":
+            try updateAllowlist(Array(arguments.dropFirst()))
+        case "auth":
+            try updateAuthHeader(Array(arguments.dropFirst()))
+        default:
+            throw CLIError.message("Usage: routingflare settings get|set|allowlist|auth ...")
+        }
+    }
+
+    private func printSettings() {
+        let settings = store.load()
+        let authSecret = secretStore.read(account: authHeaderSecretAccount)
+
+        print("Settings")
+        print("  autostart: \(settings.autoStart ? "on" : "off")")
+        print("  cloudflared: \(settings.cloudflaredPath.isEmpty ? "auto-detect" : settings.cloudflaredPath)")
+        print("  dns tunnel id: \(settings.dnsTunnelID.isEmpty ? "-" : settings.dnsTunnelID)")
+        print("  dns credentials: \(settings.dnsCredentialsFile.isEmpty ? "-" : settings.dnsCredentialsFile)")
+        print("  allowlist: \(settings.allowlistEntries.isEmpty ? "allow all" : settings.allowlistEntries.joined(separator: ", "))")
+        print("  auth header: \(settings.authHeaderEnabled ? "on" : "off")")
+        print("  auth header name: \(settings.authHeaderName)")
+        print("  auth secret: \(authSecret?.isEmpty == false ? "set" : "not set")")
+    }
+
+    private func setSettings(_ arguments: [String]) throws {
+        guard !arguments.isEmpty else {
+            throw CLIError.message("Usage: routingflare settings set [--autostart on|off] [--cloudflared path] [--dns-tunnel-id id] [--dns-credentials file]")
+        }
+
+        let options = parseOptions(arguments)
+        var settings = store.load()
+        var changed = false
+
+        if let value = options["autostart"] {
+            settings.autoStart = try boolValue(value, name: "autostart")
+            changed = true
+        }
+        if let path = options["cloudflared"] {
+            settings.cloudflaredPath = path
+            changed = true
+        }
+        if let id = options["dns-tunnel-id"] {
+            settings.dnsTunnelID = id
+            changed = true
+        }
+        if let file = options["dns-credentials"] {
+            settings.dnsCredentialsFile = file
+            changed = true
+        }
+
+        guard changed else {
+            throw CLIError.message("No supported settings were provided.")
+        }
+
+        store.save(settings)
+        sendAppCommand("reload")
+        print("Settings updated.")
+    }
+
+    private func updateAllowlist(_ arguments: [String]) throws {
+        guard let action = arguments.first else {
+            throw CLIError.message("Usage: routingflare settings allowlist add|remove|clear [entry]")
+        }
+
+        var settings = store.load()
+        switch action {
+        case "add":
+            guard let entry = arguments.dropFirst().first?.trimmingCharacters(in: .whitespacesAndNewlines), !entry.isEmpty else {
+                throw CLIError.message("Usage: routingflare settings allowlist add <ip-or-cidr>")
+            }
+            _ = try IPAllowlist(entries: [entry])
+            if !settings.allowlistEntries.contains(entry) {
+                settings.allowlistEntries.append(entry)
+            }
+            print("Allowlist added: \(entry)")
+        case "remove", "rm":
+            guard let entry = arguments.dropFirst().first?.trimmingCharacters(in: .whitespacesAndNewlines), !entry.isEmpty else {
+                throw CLIError.message("Usage: routingflare settings allowlist remove <ip-or-cidr>")
+            }
+            settings.allowlistEntries.removeAll { $0 == entry }
+            print("Allowlist removed: \(entry)")
+        case "clear":
+            settings.allowlistEntries.removeAll()
+            print("Allowlist cleared. All inbound IPs are allowed.")
+        default:
+            throw CLIError.message("Usage: routingflare settings allowlist add|remove|clear [entry]")
+        }
+
+        store.save(settings)
+        sendAppCommand("reload")
+    }
+
+    private func updateAuthHeader(_ arguments: [String]) throws {
+        guard let action = arguments.first else {
+            throw CLIError.message("Usage: routingflare settings auth on|off|set [--name header] [--secret value]")
+        }
+
+        let options = parseOptions(Array(arguments.dropFirst()))
+        var settings = store.load()
+
+        switch action {
+        case "on", "enable":
+            settings.authHeaderEnabled = true
+        case "off", "disable":
+            settings.authHeaderEnabled = false
+        case "set":
+            break
+        default:
+            throw CLIError.message("Usage: routingflare settings auth on|off|set [--name header] [--secret value]")
+        }
+
+        if let name = options["name"]?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            settings.authHeaderName = name
+        }
+        if let secret = options["secret"] {
+            if secret.isEmpty {
+                try secretStore.delete(account: authHeaderSecretAccount)
+            } else {
+                try secretStore.write(secret, account: authHeaderSecretAccount)
+            }
+        }
+
+        store.save(settings)
+        sendAppCommand("reload")
+        print("Auth header \(settings.authHeaderEnabled ? "enabled" : "disabled").")
+    }
+
     private func printList() {
         let settings = store.load()
 
@@ -162,6 +304,8 @@ struct RoutingFlareCLI {
         print("\nOptions")
         print("  autoStart: \(settings.autoStart ? "on" : "off")")
         print("  cloudflared: \(settings.cloudflaredPath.isEmpty ? "auto-detect" : settings.cloudflaredPath)")
+        print("  allowlist: \(settings.allowlistEntries.isEmpty ? "allow all" : settings.allowlistEntries.joined(separator: ", "))")
+        print("  authHeader: \(settings.authHeaderEnabled ? "on" : "off")")
     }
 
     private func updateFromCLI() throws {
@@ -341,6 +485,17 @@ struct RoutingFlareCLI {
         return port
     }
 
+    private func boolValue(_ value: String, name: String) throws -> Bool {
+        switch value.lowercased() {
+        case "on", "true", "yes", "1":
+            return true
+        case "off", "false", "no", "0":
+            return false
+        default:
+            throw CLIError.message("--\(name) must be on or off.")
+        }
+    }
+
     private func normalizedPath(_ path: String) -> String {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "/" }
@@ -363,8 +518,15 @@ struct RoutingFlareCLI {
           routingflare remove random|dns <index>
           routingflare start
           routingflare stop
-          routingflare open
           routingflare settings
+          routingflare settings set --autostart on
+          routingflare settings set --cloudflared /opt/homebrew/bin/cloudflared
+          routingflare settings set --dns-tunnel-id <id> --dns-credentials ~/.cloudflared/<id>.json
+          routingflare settings allowlist add 203.0.113.10
+          routingflare settings allowlist remove 203.0.113.10
+          routingflare settings allowlist clear
+          routingflare settings auth on --name X-Routingflare-Secret --secret value
+          routingflare settings auth off
           routingflare update
           routingflare autostart on|off
           routingflare cloudflared /path/to/cloudflared

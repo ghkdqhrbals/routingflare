@@ -35,7 +35,7 @@ Manual install:
 - Security: inbound IP allowlist and optional auth header.
 - Logs: Cloudflare Tunnel and local proxy events.
 - Updates: check, install, and restart from the app.
-- CLI: add, remove, list, start, stop, and open routingflare from Terminal.
+- CLI: add, remove, list, start, stop, update, and edit settings from Terminal.
 
 ## CLI
 
@@ -74,22 +74,27 @@ routingflare remove random 1
 routingflare remove dns 1
 routingflare start
 routingflare stop
-routingflare open
 routingflare settings
 routingflare update
 ```
 
-### Options
+### Settings
 
 ```bash
-routingflare autostart on
-routingflare autostart off
-routingflare cloudflared /opt/homebrew/bin/cloudflared
+routingflare settings
+routingflare settings set --autostart on
+routingflare settings set --cloudflared /opt/homebrew/bin/cloudflared
+routingflare settings set --dns-tunnel-id <id> --dns-credentials ~/.cloudflared/<id>.json
+routingflare settings allowlist add 203.0.113.10
+routingflare settings allowlist remove 203.0.113.10
+routingflare settings allowlist clear
+routingflare settings auth on --name X-Routingflare-Secret --secret value
+routingflare settings auth off
 ```
 
 ### How The CLI Works
 
-The CLI writes routingflare settings to the same local preferences used by the app, then sends the running app a reload/start/stop/open command. If the app is not open, `start`, `open`, and `settings` try to launch it automatically.
+The CLI writes routingflare settings to the same local preferences used by the app. Settings commands do not open the app. If routingflare is already running, the CLI sends a reload command so the app can apply the new values.
 `routingflare update` runs entirely from the terminal. It checks the latest GitHub release, downloads the DMG when a newer version exists, replaces `/Applications/routingflare.app`, and refreshes the CLI symlink.
 
 Examples:
