@@ -163,12 +163,8 @@ struct RoutingFlareCLI {
             printSettings()
         case "set":
             try setSettings(Array(arguments.dropFirst()))
-        case "allowlist":
-            try updateAllowlist(Array(arguments.dropFirst()))
-        case "auth":
-            try updateAuthHeader(Array(arguments.dropFirst()))
         default:
-            throw CLIError.message("Usage: routingflare settings get|set|allowlist|auth ...")
+            throw CLIError.message("Usage: routingflare settings get|set ...")
         }
     }
 
@@ -180,10 +176,6 @@ struct RoutingFlareCLI {
         print("  cloudflared: \(settings.cloudflaredPath.isEmpty ? "auto-detect" : settings.cloudflaredPath)")
         print("  dns tunnel id: \(settings.dnsTunnelID.isEmpty ? "-" : settings.dnsTunnelID)")
         print("  dns credentials: \(settings.dnsCredentialsFile.isEmpty ? "-" : settings.dnsCredentialsFile)")
-        print("  allowlist: \(settings.allowlistEntries.isEmpty ? "allow all" : settings.allowlistEntries.joined(separator: ", "))")
-        print("  auth header: \(settings.authHeaderEnabled ? "on" : "off")")
-        print("  auth header name: \(settings.authHeaderName)")
-        print("  auth secret: \(settings.authHeaderSecret.isEmpty ? "not set" : "set")")
     }
 
     private func setSettings(_ arguments: [String]) throws {
@@ -221,70 +213,6 @@ struct RoutingFlareCLI {
         print("Settings updated.")
     }
 
-    private func updateAllowlist(_ arguments: [String]) throws {
-        guard let action = arguments.first else {
-            throw CLIError.message("Usage: routingflare settings allowlist add|remove|clear [entry]")
-        }
-
-        var settings = store.load()
-        switch action {
-        case "add":
-            guard let entry = arguments.dropFirst().first?.trimmingCharacters(in: .whitespacesAndNewlines), !entry.isEmpty else {
-                throw CLIError.message("Usage: routingflare settings allowlist add <ip-or-cidr>")
-            }
-            _ = try IPAllowlist(entries: [entry])
-            if !settings.allowlistEntries.contains(entry) {
-                settings.allowlistEntries.append(entry)
-            }
-            print("Allowlist added: \(entry)")
-        case "remove", "rm":
-            guard let entry = arguments.dropFirst().first?.trimmingCharacters(in: .whitespacesAndNewlines), !entry.isEmpty else {
-                throw CLIError.message("Usage: routingflare settings allowlist remove <ip-or-cidr>")
-            }
-            settings.allowlistEntries.removeAll { $0 == entry }
-            print("Allowlist removed: \(entry)")
-        case "clear":
-            settings.allowlistEntries.removeAll()
-            print("Allowlist cleared. All inbound IPs are allowed.")
-        default:
-            throw CLIError.message("Usage: routingflare settings allowlist add|remove|clear [entry]")
-        }
-
-        store.save(settings)
-        sendAppCommand("reload")
-    }
-
-    private func updateAuthHeader(_ arguments: [String]) throws {
-        guard let action = arguments.first else {
-            throw CLIError.message("Usage: routingflare settings auth on|off|set [--name header] [--secret value]")
-        }
-
-        let options = parseOptions(Array(arguments.dropFirst()))
-        var settings = store.load()
-
-        switch action {
-        case "on", "enable":
-            settings.authHeaderEnabled = true
-        case "off", "disable":
-            settings.authHeaderEnabled = false
-        case "set":
-            break
-        default:
-            throw CLIError.message("Usage: routingflare settings auth on|off|set [--name header] [--secret value]")
-        }
-
-        if let name = options["name"]?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
-            settings.authHeaderName = name
-        }
-        if let secret = options["secret"] {
-            settings.authHeaderSecret = secret
-        }
-
-        store.save(settings)
-        sendAppCommand("reload")
-        print("Auth header \(settings.authHeaderEnabled ? "enabled" : "disabled").")
-    }
-
     private func printList() {
         let settings = store.load()
         let snapshot = liveRouteStatusSnapshot()
@@ -307,8 +235,6 @@ struct RoutingFlareCLI {
         print("\nOptions")
         print("  autoStart: \(settings.autoStart ? "on" : "off")")
         print("  cloudflared: \(settings.cloudflaredPath.isEmpty ? "auto-detect" : settings.cloudflaredPath)")
-        print("  allowlist: \(settings.allowlistEntries.isEmpty ? "allow all" : settings.allowlistEntries.joined(separator: ", "))")
-        print("  authHeader: \(settings.authHeaderEnabled ? "on" : "off")")
     }
 
     private func routeSecurity(_ arguments: [String]) throws {

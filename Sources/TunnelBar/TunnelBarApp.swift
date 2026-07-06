@@ -116,7 +116,6 @@ enum AppTab: String, CaseIterable, Identifiable {
     case routes
     case quickURL
     case dns
-    case security
     case options
     case logs
     case about
@@ -131,8 +130,6 @@ enum AppTab: String, CaseIterable, Identifiable {
             return "Random DNS"
         case .dns:
             return "DNS"
-        case .security:
-            return "Security"
         case .options:
             return "Options"
         case .logs:
@@ -148,7 +145,7 @@ enum AppTab: String, CaseIterable, Identifiable {
             return .quickURL
         case .dns:
             return .dns
-        case .routes, .security, .options, .logs, .about:
+        case .routes, .options, .logs, .about:
             return nil
         }
     }
@@ -161,8 +158,6 @@ enum AppTab: String, CaseIterable, Identifiable {
             return "globe"
         case .dns:
             return "network"
-        case .security:
-            return "lock.shield"
         case .options:
             return "slider.horizontal.3"
         case .logs:
@@ -277,6 +272,9 @@ final class TunnelBarViewModel: ObservableObject {
     @Published var installInProgress = false
     @Published var automaticInstallAttempted = false
     @Published var authHeaderSecret = ""
+    @Published var routeAuthHeaderEnabledDraft = false
+    @Published var routeAuthHeaderNameDraft = "X-Routingflare-Secret"
+    @Published var routeAuthSavedRecently = false
     @Published var selectedSecurityRouteKind: TunnelMode?
     @Published var selectedSecurityRoute: LocalProxyRoute?
     @Published var updateStatus: UpdateStatus = .idle
@@ -342,15 +340,7 @@ final class TunnelBarViewModel: ObservableObject {
         self.newQuickPortText = String(loaded.targetPort)
         self.selectedTab = .routes
         self.settings = loaded
-        self.authHeaderSecret = loaded.authHeaderSecret
-        self.accessPolicy = MutableProxyAccessPolicy(
-            allowlistEntries: loaded.allowlistEntries,
-            authHeader: Self.authHeader(
-                enabled: loaded.authHeaderEnabled,
-                name: loaded.authHeaderName,
-                secret: loaded.authHeaderSecret
-            )
-        )
+        self.accessPolicy = MutableProxyAccessPolicy(allowlistEntries: [])
         self.routeSecurityPolicies = MutableRouteSecurityPolicies(routes: loaded.quickRoutes + loaded.dnsRoutes)
         setupCLICommandObserver()
         handlePendingCLICommand()
@@ -589,8 +579,8 @@ final class TunnelBarViewModel: ObservableObject {
         defer { saveRouteStatusSnapshot() }
         let wasStarted = status.isStarted
         settings = settingsStore.load()
-        authHeaderSecret = settings.authHeaderSecret
         syncSelectedSecurityRoute()
+        loadSelectedRouteSecurityDraft()
         newDNSPortText = String(settings.dnsTargetPort)
         newQuickPortText = String(settings.targetPort)
         updateAccessPolicy()
@@ -889,30 +879,45 @@ final class TunnelBarViewModel: ObservableObject {
             return
         }
         updateSelectedSecurity { security in
-            let trimmedName = security.authHeaderName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedName = routeAuthHeaderNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            security.authHeaderEnabled = routeAuthHeaderEnabledDraft
             security.authHeaderName = trimmedName.isEmpty ? "X-Routingflare-Secret" : trimmedName
             security.authHeaderSecret = authHeaderSecret
         }
+        loadSelectedRouteSecurityDraft()
+        routeAuthSavedRecently = true
     }
 
     func setSelectedAuthHeaderEnabled(_ enabled: Bool) {
-        updateSelectedSecurity { security in
-            security.authHeaderEnabled = enabled
-        }
+        routeAuthHeaderEnabledDraft = enabled
+        routeAuthSavedRecently = false
     }
 
     func setSelectedAuthHeaderName(_ name: String) {
-        updateSelectedSecurity { security in
-            security.authHeaderName = name
-        }
+        routeAuthHeaderNameDraft = name
+        routeAuthSavedRecently = false
     }
 
     func loadAuthHeaderSecretIfNeeded() {
-        authHeaderSecret = selectedRouteSecurity.authHeaderSecret
+        loadSelectedRouteSecurityDraft()
+    }
+
+    func updateAuthHeaderSecretDraft(_ secret: String) {
+        authHeaderSecret = secret
+        routeAuthSavedRecently = false
     }
 
     var selectedRouteSecurity: RouteSecurity {
         selectedSecurityRoute?.security ?? RouteSecurity()
+    }
+
+    var routeAuthHeaderHasChanges: Bool {
+        let security = selectedRouteSecurity
+        let savedName = security.authHeaderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let draftName = routeAuthHeaderNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return routeAuthHeaderEnabledDraft != security.authHeaderEnabled ||
+        (draftName.isEmpty ? "X-Routingflare-Secret" : draftName) != (savedName.isEmpty ? "X-Routingflare-Secret" : savedName) ||
+        authHeaderSecret != security.authHeaderSecret
     }
 
     var selectedRouteDisplayName: String {
@@ -930,9 +935,20 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     func selectRouteForSecurity(_ route: LocalProxyRoute, kind: TunnelMode) {
+        let normalized = normalizedRoute(route, wildcardHost: kind == .quickURL)
+        if selectedSecurityRouteKind == kind, selectedSecurityRoute == normalized {
+            selectedSecurityRouteKind = nil
+            selectedSecurityRoute = nil
+            authHeaderSecret = ""
+            routeAuthHeaderEnabledDraft = false
+            routeAuthHeaderNameDraft = "X-Routingflare-Secret"
+            routeAuthSavedRecently = false
+            newAllowlistEntry = ""
+            return
+        }
         selectedSecurityRouteKind = kind
-        selectedSecurityRoute = normalizedRoute(route, wildcardHost: kind == .quickURL)
-        authHeaderSecret = selectedRouteSecurity.authHeaderSecret
+        selectedSecurityRoute = normalized
+        loadSelectedRouteSecurityDraft()
         newAllowlistEntry = ""
     }
 
@@ -1036,7 +1052,6 @@ final class TunnelBarViewModel: ObservableObject {
             selectedSecurityRoute = normalizedRoute(route, wildcardHost: false)
         }
 
-        authHeaderSecret = selectedRouteSecurity.authHeaderSecret
         updateAccessPolicy()
         saveSettings()
     }
@@ -1056,9 +1071,21 @@ final class TunnelBarViewModel: ObservableObject {
         if selectedSecurityRoute == nil {
             selectedSecurityRouteKind = nil
             authHeaderSecret = ""
+            routeAuthHeaderEnabledDraft = false
+            routeAuthHeaderNameDraft = "X-Routingflare-Secret"
         } else {
-            authHeaderSecret = selectedRouteSecurity.authHeaderSecret
+            loadSelectedRouteSecurityDraft()
         }
+    }
+
+    private func loadSelectedRouteSecurityDraft() {
+        let security = selectedRouteSecurity
+        routeAuthHeaderEnabledDraft = security.authHeaderEnabled
+        routeAuthHeaderNameDraft = security.authHeaderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "X-Routingflare-Secret"
+            : security.authHeaderName
+        authHeaderSecret = security.authHeaderSecret
+        routeAuthSavedRecently = false
     }
 
     func addTargetPath() {
@@ -1474,28 +1501,8 @@ final class TunnelBarViewModel: ObservableObject {
         activeTunnelModes.remove(.dns)
     }
 
-    private var normalizedAuthHeaderName: String {
-        let trimmed = settings.authHeaderName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "X-Routingflare-Secret" : trimmed
-    }
-
-    private var currentAuthHeader: ProxyAuthHeader {
-        Self.authHeader(
-            enabled: settings.authHeaderEnabled,
-            name: normalizedAuthHeaderName,
-            secret: settings.authHeaderSecret
-        )
-    }
-
-    private static func authHeader(enabled: Bool, name: String, secret: String) -> ProxyAuthHeader {
-        ProxyAuthHeader(enabled: enabled, name: name, secret: secret)
-    }
-
     private func updateAccessPolicy() {
-        accessPolicy.update(
-            allowlistEntries: settings.allowlistEntries,
-            authHeader: currentAuthHeader
-        )
+        accessPolicy.update(allowlistEntries: [])
     }
 
     private func updateRouteSecurityPolicies() {
@@ -1905,13 +1912,13 @@ struct NativeMenuContentView: View {
     }
 
     private func openSettingsWindow() {
-        model.selectedTab = .security
+        model.selectedTab = .options
         RoutingFlareWindowPresenter.shared.show(model: model)
     }
 
     private func openRouteSecurity(_ route: LocalProxyRoute, kind: TunnelMode) {
         model.selectRouteForSecurity(route, kind: kind)
-        model.selectedTab = .security
+        model.selectedTab = .routes
         RoutingFlareWindowPresenter.shared.show(model: model)
     }
 
@@ -1974,8 +1981,8 @@ private final class RoutingFlareWindowPresenter {
         let window = NSWindow(contentViewController: hostingController)
         window.title = "routingflare"
         window.setContentSize(NSSize(width: 980, height: 660))
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
-        window.titlebarAppearsTransparent = true
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.titlebarAppearsTransparent = false
         window.isReleasedWhenClosed = false
         window.level = .normal
         window.collectionBehavior = [.moveToActiveSpace]
@@ -2196,6 +2203,7 @@ struct AppWindowView: View {
             detail
                 .frame(minWidth: 640, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .padding(.top, 18)
     }
 
     private var sidebar: some View {
@@ -2218,7 +2226,7 @@ struct AppWindowView: View {
     }
 
     private var detail: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: 18) {
             detailHeader
 
             Divider()
@@ -2232,8 +2240,6 @@ struct AppWindowView: View {
             )
             .padding(0)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-            Spacer(minLength: 0)
         }
         .padding(28)
     }
@@ -2246,10 +2252,14 @@ struct AppWindowView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(tab.label)
                         .font(.system(size: 14, weight: model.selectedTab == tab ? .semibold : .regular))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     if let subtitle = tab.subtitle {
                         Text(subtitle)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .truncationMode(.tail)
                     }
                 }
                 Spacer()
@@ -2277,6 +2287,8 @@ struct AppWindowView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("routingflare")
                     .font(AppTypography.sectionTitle)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 Text(model.status.label)
                     .foregroundStyle(.secondary)
                     .font(.caption)
@@ -2289,6 +2301,9 @@ struct AppWindowView: View {
         HStack(alignment: .center) {
             Text(model.selectedTab.label)
                 .font(AppTypography.title)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(maxWidth: .infinity, alignment: .leading)
             Spacer()
             Toggle("Start", isOn: Binding(
                 get: { model.status.isStarted },
@@ -2353,7 +2368,7 @@ struct MenuContentView: View {
             }
         }
         .padding(showsTabs ? 16 : 0)
-        .frame(maxHeight: 1170, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .transaction { transaction in
             transaction.animation = nil
         }
@@ -2373,7 +2388,7 @@ struct MenuContentView: View {
             selectDNSRoute: { model.selectRouteForSecurity($0, kind: .dns) },
             removeQuickRoute: { model.removeQuickRoute($0) },
             removeDNSRoute: { model.removeDNSRoute($0) },
-            tableHeight: showsTabs ? 120 : 620
+            tableHeight: showsTabs ? 120 : nil
         )
     }
 
@@ -2386,8 +2401,6 @@ struct MenuContentView: View {
         } else if model.selectedTab == .dns {
             dnsControls
             dnsRouteForm
-        } else if model.selectedTab == .security {
-            securityControls
         } else if model.selectedTab == .options {
             optionsControls
         } else if model.selectedTab == .logs {
@@ -2604,26 +2617,32 @@ struct MenuContentView: View {
     private var authHeaderControls: some View {
         VStack(alignment: .leading, spacing: 10) {
             Toggle("Auth Header", isOn: Binding(
-                get: { model.selectedRouteSecurity.authHeaderEnabled },
+                get: { model.routeAuthHeaderEnabledDraft },
                 set: { model.setSelectedAuthHeaderEnabled($0) }
             ))
             TextField("Header name", text: Binding(
-                get: { model.selectedRouteSecurity.authHeaderName },
+                get: { model.routeAuthHeaderNameDraft },
                 set: { model.setSelectedAuthHeaderName($0) }
             ))
                 .textFieldStyle(.roundedBorder)
-                .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
+                .disabled(!model.routeAuthHeaderEnabledDraft)
                 .onSubmit(model.saveAuthHeaderSettings)
             HStack(spacing: 6) {
                 if showsAuthSecret {
-                    TextField("Secret", text: $model.authHeaderSecret)
+                    TextField("Secret", text: Binding(
+                        get: { model.authHeaderSecret },
+                        set: { model.updateAuthHeaderSecretDraft($0) }
+                    ))
                         .textFieldStyle(.roundedBorder)
-                        .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
+                        .disabled(!model.routeAuthHeaderEnabledDraft)
                         .onSubmit(model.saveAuthHeaderSettings)
                 } else {
-                    SecureField("Secret", text: $model.authHeaderSecret)
+                    SecureField("Secret", text: Binding(
+                        get: { model.authHeaderSecret },
+                        set: { model.updateAuthHeaderSecretDraft($0) }
+                    ))
                         .textFieldStyle(.roundedBorder)
-                        .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
+                        .disabled(!model.routeAuthHeaderEnabledDraft)
                         .onSubmit(model.saveAuthHeaderSettings)
                 }
                 Button {
@@ -2632,13 +2651,15 @@ struct MenuContentView: View {
                     Image(systemName: showsAuthSecret ? "eye.slash" : "eye")
                 }
                 .buttonStyle(.plain)
-                .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
+                .disabled(!model.routeAuthHeaderEnabledDraft)
                 .help(showsAuthSecret ? "Hide secret" : "Show secret")
             }
             Button(action: model.saveAuthHeaderSettings) {
-                Label("Save Auth Header", systemImage: "key.fill")
+                Label(model.routeAuthSavedRecently ? "Saved Auth Header" : "Save Auth Header", systemImage: "key.fill")
             }
-            .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
+            .buttonStyle(.borderedProminent)
+            .tint(model.routeAuthHeaderHasChanges ? .accentColor : .secondary)
+            .disabled(!model.routeAuthHeaderHasChanges)
         }
     }
 
@@ -2711,7 +2732,7 @@ private struct RoutesTableView: View {
     let selectDNSRoute: (LocalProxyRoute) -> Void
     let removeQuickRoute: (LocalProxyRoute) -> Void
     let removeDNSRoute: (LocalProxyRoute) -> Void
-    let tableHeight: CGFloat
+    let tableHeight: CGFloat?
 
     private let statusColumnWidth: CGFloat = 16
     private let targetColumnWidth: CGFloat = 148
@@ -2735,6 +2756,7 @@ private struct RoutesTableView: View {
                                     isActive: runningModes.contains(.quickURL),
                                     isPending: quickRouteIsPending(route),
                                     statusText: nil,
+                                    isSelected: isExpanded(route, kind: .quickURL),
                                     select: { selectQuickRoute(route) },
                                     remove: { removeQuickRoute(route) }
                                 )
@@ -2752,6 +2774,7 @@ private struct RoutesTableView: View {
                                     isActive: runningModes.contains(.dns),
                                     isPending: dnsUnavailableReason != nil,
                                     statusText: runningModes.contains(.dns) ? nil : dnsUnavailableReason,
+                                    isSelected: isExpanded(route, kind: .dns),
                                     select: { selectDNSRoute(route) },
                                     remove: { removeDNSRoute(route) }
                                 )
@@ -2764,8 +2787,14 @@ private struct RoutesTableView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(
+                maxWidth: .infinity,
+                maxHeight: tableHeight == nil ? .infinity : nil,
+                alignment: .topLeading
+            )
             .frame(height: tableHeight)
         }
+        .frame(maxWidth: .infinity, maxHeight: tableHeight == nil ? .infinity : nil, alignment: .topLeading)
         .onDisappear {
             hideTooltip()
         }
@@ -2783,7 +2812,7 @@ private struct RoutesTableView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: max(86, tableHeight - 8))
+        .frame(height: max(86, (tableHeight ?? 180) - 8))
     }
 
     private var tableHeader: some View {
@@ -2810,55 +2839,72 @@ private struct RoutesTableView: View {
         isActive: Bool,
         isPending: Bool,
         statusText: String?,
+        isSelected: Bool,
         select: @escaping () -> Void,
         remove: @escaping () -> Void
     ) -> some View {
         let target = "127.0.0.1:\(String(port))"
-        return HStack(spacing: columnSpacing) {
-            Circle()
-                .fill(routeDotColor(isActive: isActive, isPending: isPending))
-                .frame(width: 8, height: 8)
-                .frame(width: statusColumnWidth)
-            VStack(alignment: .leading, spacing: 2) {
-                copyableText(from, width: nil, truncationMode: .middle)
-                if let statusText {
-                    tooltippedText(
-                        statusText,
-                        width: nil,
-                        truncationMode: .tail,
-                        font: .caption,
-                        foregroundStyle: .orange,
-                        copyable: false
-                    )
+        return HStack(spacing: 0) {
+            Button(action: select) {
+                HStack(spacing: columnSpacing) {
+                    Circle()
+                        .fill(routeDotColor(isActive: isActive, isPending: isPending))
+                        .frame(width: 8, height: 8)
+                        .frame(width: statusColumnWidth)
+                    VStack(alignment: .leading, spacing: 2) {
+                        routeLineText(from, width: nil, truncationMode: .middle)
+                        if let statusText {
+                            tooltippedText(
+                                statusText,
+                                width: nil,
+                                truncationMode: .tail,
+                                font: .caption,
+                                foregroundStyle: .orange,
+                                copyable: false
+                            )
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    routeLineText(target, width: targetColumnWidth, truncationMode: .tail)
                 }
+                .padding(.leading, tableInset)
+                .padding(.trailing, columnSpacing)
+                .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            copyableText(target, width: targetColumnWidth, truncationMode: .tail)
+            .buttonStyle(.plain)
+
             Button(action: remove) {
                 Image(systemName: "minus.circle")
                     .font(AppTypography.content)
             }
             .buttonStyle(.plain)
             .frame(width: actionColumnWidth, height: 28)
+            .padding(.trailing, tableInset)
         }
+        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture(perform: select)
-        .frame(height: 52)
-        .padding(.horizontal, tableInset)
+        .background {
+            if isSelected {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.accentColor.opacity(0.13))
+            }
+        }
     }
 
     private func isExpanded(_ route: LocalProxyRoute, kind: TunnelMode) -> Bool {
         model.selectedSecurityRouteKind == kind && model.selectedSecurityRoute == route
     }
 
-    private func copyableText(_ value: String, width: CGFloat?, truncationMode: Text.TruncationMode) -> some View {
+    private func routeLineText(_ value: String, width: CGFloat?, truncationMode: Text.TruncationMode) -> some View {
         tooltippedText(
             value,
             width: width,
             truncationMode: truncationMode,
             font: AppTypography.contentStrong,
             foregroundStyle: .secondary,
-            copyable: true
+            copyable: false
         )
     }
 
@@ -2879,11 +2925,6 @@ private struct RoutesTableView: View {
             .frame(width: width, alignment: .leading)
             .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
             .contentShape(Rectangle())
-            .onTapGesture {
-                if copyable {
-                    copy(value)
-                }
-            }
             .onHover { hovering in
                 if hovering {
                     scheduleTooltip(text: value)
@@ -2929,14 +2970,43 @@ private struct RouteSecurityInlineView: View {
     @State private var showsSecret = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Divider()
+            selectedRouteSummary
             allowlist
             authHeader
         }
         .padding(.leading, 38)
         .padding(.trailing, 38)
         .padding(.vertical, 12)
+    }
+
+    private var selectedRouteSummary: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Selected route")
+                .font(AppTypography.contentStrong)
+                .foregroundStyle(.primary)
+            selectablePair("URL", model.selectedRouteDisplayName)
+            if let route = model.selectedSecurityRoute {
+                selectablePair("To", "127.0.0.1:\(route.targetPort)")
+            }
+        }
+    }
+
+    private func selectablePair(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(label)
+                .font(AppTypography.content)
+                .foregroundStyle(.tertiary)
+                .frame(width: 34, alignment: .leading)
+            Text(value)
+                .font(AppTypography.content)
+                .foregroundStyle(.secondary)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            Spacer(minLength: 0)
+        }
     }
 
     private var allowlist: some View {
@@ -2978,29 +3048,35 @@ private struct RouteSecurityInlineView: View {
     private var authHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle("Auth Header", isOn: Binding(
-                get: { model.selectedRouteSecurity.authHeaderEnabled },
+                get: { model.routeAuthHeaderEnabledDraft },
                 set: { model.setSelectedAuthHeaderEnabled($0) }
             ))
             .font(AppTypography.contentStrong)
 
             TextField("Header name", text: Binding(
-                get: { model.selectedRouteSecurity.authHeaderName },
+                get: { model.routeAuthHeaderNameDraft },
                 set: { model.setSelectedAuthHeaderName($0) }
             ))
             .textFieldStyle(.roundedBorder)
-            .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
+            .disabled(!model.routeAuthHeaderEnabledDraft)
             .onSubmit(model.saveAuthHeaderSettings)
 
             HStack(spacing: 8) {
                 if showsSecret {
-                    TextField("Secret", text: $model.authHeaderSecret)
+                    TextField("Secret", text: Binding(
+                        get: { model.authHeaderSecret },
+                        set: { model.updateAuthHeaderSecretDraft($0) }
+                    ))
                         .textFieldStyle(.roundedBorder)
-                        .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
+                        .disabled(!model.routeAuthHeaderEnabledDraft)
                         .onSubmit(model.saveAuthHeaderSettings)
                 } else {
-                    SecureField("Secret", text: $model.authHeaderSecret)
+                    SecureField("Secret", text: Binding(
+                        get: { model.authHeaderSecret },
+                        set: { model.updateAuthHeaderSecretDraft($0) }
+                    ))
                         .textFieldStyle(.roundedBorder)
-                        .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
+                        .disabled(!model.routeAuthHeaderEnabledDraft)
                         .onSubmit(model.saveAuthHeaderSettings)
                 }
                 Button {
@@ -3009,10 +3085,12 @@ private struct RouteSecurityInlineView: View {
                     Image(systemName: showsSecret ? "eye.slash" : "eye")
                 }
                 .buttonStyle(.plain)
-                .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
+                .disabled(!model.routeAuthHeaderEnabledDraft)
 
-                Button("Save", action: model.saveAuthHeaderSettings)
-                    .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
+                Button(model.routeAuthSavedRecently ? "Saved" : "Save", action: model.saveAuthHeaderSettings)
+                    .buttonStyle(.borderedProminent)
+                    .tint(model.routeAuthHeaderHasChanges ? .accentColor : .secondary)
+                    .disabled(!model.routeAuthHeaderHasChanges)
             }
         }
     }
