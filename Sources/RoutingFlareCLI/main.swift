@@ -504,6 +504,8 @@ struct RoutingFlareCLI {
         switch entry.state {
         case .opened:
             return " [opened]"
+        case .degraded:
+            return " [retrying\(messageSuffix(entry.message))]"
         case .pending:
             return " [pending\(messageSuffix(entry.message))]"
         case .stopped:

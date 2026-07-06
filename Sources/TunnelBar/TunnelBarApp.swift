@@ -477,7 +477,7 @@ final class TunnelBarViewModel: ObservableObject {
 
     private var dnsRouteRuntimeState: RouteRuntimeState {
         if let dnsCloudflaredIssue, !dnsCloudflaredIssue.isEmpty {
-            return .error
+            return activeTunnelModes.contains(.dns) ? .degraded : .error
         }
         if requiresRestart {
             return .restartRequired
@@ -508,7 +508,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func dnsPublicURL(for route: LocalProxyRoute) -> URL? {
-        guard activeTunnelModes.contains(.dns), dnsCloudflaredIssue == nil else {
+        guard activeTunnelModes.contains(.dns) else {
             return nil
         }
         guard let baseURL = URL(string: "https://\(route.hostname)") else {
@@ -1345,8 +1345,16 @@ final class TunnelBarViewModel: ObservableObject {
     private func handleTunnelOutput(_ output: String) {
         defer { saveRouteStatusSnapshot() }
         let recoveredConnection = TunnelURLParser.outputShowsRegisteredConnection(output)
+        let connectionRetryIssue = TunnelURLParser.outputShowsConnectionRetryIssue(output)
         let issue = recoveredConnection ? nil : cloudflaredIssue(from: output, previousLog: logs.last)
         appendLog(output)
+        if connectionRetryIssue {
+            dnsCloudflaredIssue = cloudflaredRetryIssue(from: output)
+            activeTunnelModes.insert(.dns)
+            status = .running
+            publicURL = publicURLs.first
+            return
+        }
         if let issue {
             dnsCloudflaredIssue = issue
             activeTunnelModes.remove(.dns)
@@ -1719,6 +1727,32 @@ final class TunnelBarViewModel: ObservableObject {
         return "cloudflared: \(message)"
     }
 
+    private func cloudflaredRetryIssue(from output: String) -> String {
+        let lines = output
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        let retryLine = lines.last { $0.contains("Retrying connection in") }
+        let errorLine = lines.first { line in
+            line.contains("context canceled") ||
+            line.contains("control stream encountered a failure") ||
+            line.contains("failed to serve tunnel connection") ||
+            line.contains("Serve tunnel error") ||
+            line.contains("Connection terminated")
+        }
+
+        if let retryLine, let errorLine, retryLine != errorLine {
+            return "cloudflared: \(cloudflaredErrorMessage(from: errorLine))\ncloudflared: \(retryLine)"
+        }
+        if let retryLine {
+            return "cloudflared: \(retryLine)"
+        }
+        if let errorLine {
+            return "cloudflared: \(cloudflaredErrorMessage(from: errorLine))"
+        }
+        return "cloudflared connection retrying"
+    }
+
     private func recentCloudflaredIssueFromLogs() -> String? {
         let lines = logs
             .flatMap { $0.components(separatedBy: .newlines) }
@@ -1898,7 +1932,7 @@ struct NativeMenuContentView: View {
 
     private var dnsRouteStatus: RouteMenuStatus {
         if model.dnsUnavailableReason != nil {
-            return .error
+            return model.runningModes.contains(.dns) ? .degraded : .error
         }
         if model.runningModes.contains(.dns) && !model.requiresRestart {
             return .opened
@@ -1930,6 +1964,7 @@ struct NativeMenuContentView: View {
 
 private enum RouteMenuStatus {
     case opened
+    case degraded
     case pending
     case restartRequired
     case error
@@ -1939,6 +1974,8 @@ private enum RouteMenuStatus {
         switch self {
         case .opened:
             return "Opened"
+        case .degraded:
+            return "Retrying"
         case .pending:
             return "Fetching"
         case .restartRequired:
@@ -1954,7 +1991,7 @@ private enum RouteMenuStatus {
         switch self {
         case .opened:
             return .green
-        case .pending, .restartRequired, .error:
+        case .degraded, .pending, .restartRequired, .error:
             return .orange
         case .stopped:
             return .secondary
@@ -2773,7 +2810,7 @@ private struct RoutesTableView: View {
                                     port: route.targetPort,
                                     isActive: runningModes.contains(.dns),
                                     isPending: dnsUnavailableReason != nil,
-                                    statusText: runningModes.contains(.dns) ? nil : dnsUnavailableReason,
+                                    statusText: dnsUnavailableReason,
                                     isSelected: isExpanded(route, kind: .dns),
                                     select: { selectDNSRoute(route) },
                                     remove: { removeDNSRoute(route) }

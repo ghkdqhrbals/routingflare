@@ -66,4 +66,15 @@ public enum TunnelURLParser {
     public static func outputShowsRegisteredConnection(_ output: String) -> Bool {
         output.contains("Registered tunnel connection")
     }
+
+    public static func outputShowsConnectionRetryIssue(_ output: String) -> Bool {
+        output.contains("Retrying connection in") &&
+        (
+            output.contains("context canceled") ||
+            output.contains("control stream encountered a failure") ||
+            output.contains("failed to serve tunnel connection") ||
+            output.contains("Serve tunnel error") ||
+            output.contains("Connection terminated")
+        )
+    }
 }

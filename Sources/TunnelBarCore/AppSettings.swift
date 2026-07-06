@@ -196,6 +196,7 @@ public final class UserDefaultsSettingsStore: SettingsStoring {
 
 public enum RouteRuntimeState: String, Codable, Equatable {
     case opened
+    case degraded
     case pending
     case stopped
     case restartRequired

@@ -66,4 +66,23 @@ final class TunnelCommandTests: XCTestCase {
         XCTAssertTrue(TunnelURLParser.outputShowsRegisteredConnection(output))
         XCTAssertFalse(TunnelURLParser.outputShowsRegisteredConnection("2026-07-06T09:28:13Z INF Retrying connection in up to 1m4s"))
     }
+
+    func testDetectsCloudflaredConnectionRetryIssue() {
+        let output = """
+        2026-07-06T15:16:15Z ERR failed to run the datagram handler error="context canceled" connIndex=2 event=0 ip=198.41.192.37
+        2026-07-06T15:16:15Z WRN failed to serve tunnel connection error="control stream encountered a failure while serving" connIndex=2 event=0 ip=198.41.192.37
+        2026-07-06T15:16:15Z WRN Serve tunnel error error="control stream encountered a failure while serving" connIndex=2 event=0 ip=198.41.192.37
+        2026-07-06T15:16:15Z INF Retrying connection in up to 16s connIndex=2 event=0 ip=198.41.192.37
+        """
+
+        XCTAssertTrue(TunnelURLParser.outputShowsConnectionRetryIssue(output))
+    }
+
+    func testDoesNotClassifyOriginFailureAsConnectionRetryIssue() {
+        let output = """
+        2026-07-06T13:50:59Z ERR error="Unable to reach the origin service. The service may be down or it may not be responding to traffic from cloudflared: net/http: HTTP/1.x transport connection broken: unsupported transfer encoding: \\"Identity\\"" connIndex=1 event=1 ingressRule=0 originService=http://127.0.0.1:64027
+        """
+
+        XCTAssertFalse(TunnelURLParser.outputShowsConnectionRetryIssue(output))
+    }
 }
