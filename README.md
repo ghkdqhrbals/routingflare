@@ -32,7 +32,7 @@ Manual install:
 
 - Random DNS: expose a local port with a temporary public URL.
 - DNS: connect your own hostname to a local port and path.
-- Security: inbound IP allowlist and optional auth header.
+- Security: per-route inbound IP allowlist and optional auth header.
 - Logs: Cloudflare Tunnel and local proxy events.
 - Updates: check, install, and restart from the app.
 - CLI: add, remove, list, start, stop, update, and edit settings from Terminal.
@@ -85,17 +85,24 @@ routingflare settings
 routingflare settings set --autostart on
 routingflare settings set --cloudflared /opt/homebrew/bin/cloudflared
 routingflare settings set --dns-tunnel-id <id> --dns-credentials ~/.cloudflared/<id>.json
-routingflare settings allowlist add 203.0.113.10
-routingflare settings allowlist remove 203.0.113.10
-routingflare settings allowlist clear
-routingflare settings auth on --name X-Routingflare-Secret --secret value
-routingflare settings auth off
+```
+
+### Route Security
+
+Use the route numbers shown by `routingflare list`.
+
+```bash
+routingflare security random 1 allowlist add 203.0.113.10
+routingflare security random 1 allowlist clear
+routingflare security random 1 auth on --name X-Routingflare-Secret --secret value
+routingflare security dns 1 show
 ```
 
 ### How The CLI Works
 
 The CLI writes routingflare settings to the same local preferences used by the app. Settings commands do not open the app. If routingflare is already running, the CLI sends a reload command so the app can apply the new values.
 `routingflare update` runs entirely from the terminal. It checks the latest GitHub release, downloads the DMG when a newer version exists, replaces `/Applications/routingflare.app`, and refreshes the CLI symlink.
+This also works over SSH, so you can keep Cloudflare sessions running and adjust DNS route access without opening the macOS app window.
 
 Examples:
 

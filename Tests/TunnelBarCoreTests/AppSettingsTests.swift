@@ -58,4 +58,30 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(decoded.authHeaderName, "X-Test-Secret")
         XCTAssertEqual(decoded.authHeaderSecret, "local-secret")
     }
+
+    func testRouteSecurityRoundTrip() throws {
+        let settings = AppSettings(
+            quickRoutes: [
+                LocalProxyRoute(
+                    hostname: "",
+                    targetPort: 4000,
+                    targetPath: "/",
+                    security: RouteSecurity(
+                        allowlistEntries: ["203.0.113.10"],
+                        authHeaderEnabled: true,
+                        authHeaderName: "X-Preview-Secret",
+                        authHeaderSecret: "secret"
+                    )
+                )
+            ]
+        )
+
+        let data = try JSONEncoder().encode(settings)
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: data)
+
+        XCTAssertEqual(decoded.quickRoutes.first?.security?.allowlistEntries, ["203.0.113.10"])
+        XCTAssertEqual(decoded.quickRoutes.first?.security?.authHeaderEnabled, true)
+        XCTAssertEqual(decoded.quickRoutes.first?.security?.authHeaderName, "X-Preview-Secret")
+        XCTAssertEqual(decoded.quickRoutes.first?.security?.authHeaderSecret, "secret")
+    }
 }

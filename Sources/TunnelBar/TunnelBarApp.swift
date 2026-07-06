@@ -277,6 +277,8 @@ final class TunnelBarViewModel: ObservableObject {
     @Published var installInProgress = false
     @Published var automaticInstallAttempted = false
     @Published var authHeaderSecret = ""
+    @Published var selectedSecurityRouteKind: TunnelMode?
+    @Published var selectedSecurityRoute: LocalProxyRoute?
     @Published var updateStatus: UpdateStatus = .idle
     @Published var latestUpdateURL: URL?
     @Published private var dnsCloudflaredIssue: String?
@@ -285,6 +287,7 @@ final class TunnelBarViewModel: ObservableObject {
     private let routeStatusStore: RouteStatusStoring
     private let tunnelProcess = TunnelProcess()
     private let accessPolicy: MutableProxyAccessPolicy
+    private let routeSecurityPolicies: MutableRouteSecurityPolicies
     private var proxy: LocalFilteringProxy?
     private var quickSessions: [QuickTunnelSession] = []
     private var cliCommandObserver: NSObjectProtocol?
@@ -348,6 +351,7 @@ final class TunnelBarViewModel: ObservableObject {
                 secret: loaded.authHeaderSecret
             )
         )
+        self.routeSecurityPolicies = MutableRouteSecurityPolicies(routes: loaded.quickRoutes + loaded.dnsRoutes)
         setupCLICommandObserver()
         handlePendingCLICommand()
         autoInstallCLIIfNeeded()
@@ -407,7 +411,11 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     var allowlistSummary: String {
-        settings.allowlistEntries.isEmpty ? "Allow all inbound IPs" : "\(settings.allowlistEntries.count) allowed entries"
+        let securedRoutes = (activeQuickRoutes + activeDNSRoutes).filter { route in
+            guard let security = route.security else { return false }
+            return !security.allowlistEntries.isEmpty || security.authHeaderEnabled
+        }.count
+        return securedRoutes == 0 ? "Route security off" : "\(securedRoutes) secured routes"
     }
 
     var runningModes: Set<TunnelMode> {
@@ -416,6 +424,7 @@ final class TunnelBarViewModel: ObservableObject {
 
     func saveSettings() {
         normalizeLists()
+        updateRouteSecurityPolicies()
         settingsStore.save(settings)
         saveRouteStatusSnapshot()
     }
@@ -581,6 +590,7 @@ final class TunnelBarViewModel: ObservableObject {
         let wasStarted = status.isStarted
         settings = settingsStore.load()
         authHeaderSecret = settings.authHeaderSecret
+        syncSelectedSecurityRoute()
         newDNSPortText = String(settings.dnsTargetPort)
         newQuickPortText = String(settings.targetPort)
         updateAccessPolicy()
@@ -731,6 +741,7 @@ final class TunnelBarViewModel: ObservableObject {
                 routes: activeDNSRoutes,
                 fallbackTargetPort: settings.dnsTargetPort,
                 accessPolicy: accessPolicy,
+                routeSecurityPolicies: routeSecurityPolicies,
                 logHandler: logHandler
             )
             let proxyPort = try proxy.start()
@@ -783,6 +794,7 @@ final class TunnelBarViewModel: ObservableObject {
             routes: [route],
             fallbackTargetPort: route.targetPort,
             accessPolicy: accessPolicy,
+            routeSecurityPolicies: routeSecurityPolicies,
             logHandler: { [weak self] line in
                 Task { @MainActor in
                     self?.appendLog(line)
@@ -850,32 +862,78 @@ final class TunnelBarViewModel: ObservableObject {
         }
         do {
             _ = try IPAllowlist(entries: [candidate])
-            if !settings.allowlistEntries.contains(candidate) {
-                settings.allowlistEntries.append(candidate)
+            guard selectedSecurityRoute != nil else {
+                appendLog("Select a route before adding an allowlist entry.")
+                return
             }
-            updateAccessPolicy()
+            updateSelectedSecurity { security in
+                if !security.allowlistEntries.contains(candidate) {
+                    security.allowlistEntries.append(candidate)
+                }
+            }
             newAllowlistEntry = ""
-            saveSettings()
         } catch {
             appendLog(error.localizedDescription)
         }
     }
 
     func removeAllowlistEntry(_ entry: String) {
-        settings.allowlistEntries.removeAll { $0 == entry }
-        updateAccessPolicy()
-        saveSettings()
+        updateSelectedSecurity { security in
+            security.allowlistEntries.removeAll { $0 == entry }
+        }
     }
 
     func saveAuthHeaderSettings() {
-        settings.authHeaderName = normalizedAuthHeaderName
-        settings.authHeaderSecret = authHeaderSecret
-        updateAccessPolicy()
-        saveSettings()
+        guard selectedSecurityRoute != nil else {
+            appendLog("Select a route before saving auth header settings.")
+            return
+        }
+        updateSelectedSecurity { security in
+            let trimmedName = security.authHeaderName.trimmingCharacters(in: .whitespacesAndNewlines)
+            security.authHeaderName = trimmedName.isEmpty ? "X-Routingflare-Secret" : trimmedName
+            security.authHeaderSecret = authHeaderSecret
+        }
+    }
+
+    func setSelectedAuthHeaderEnabled(_ enabled: Bool) {
+        updateSelectedSecurity { security in
+            security.authHeaderEnabled = enabled
+        }
+    }
+
+    func setSelectedAuthHeaderName(_ name: String) {
+        updateSelectedSecurity { security in
+            security.authHeaderName = name
+        }
     }
 
     func loadAuthHeaderSecretIfNeeded() {
-        authHeaderSecret = settings.authHeaderSecret
+        authHeaderSecret = selectedRouteSecurity.authHeaderSecret
+    }
+
+    var selectedRouteSecurity: RouteSecurity {
+        selectedSecurityRoute?.security ?? RouteSecurity()
+    }
+
+    var selectedRouteDisplayName: String {
+        guard let route = selectedSecurityRoute else {
+            return "Select a route"
+        }
+        switch selectedSecurityRouteKind {
+        case .quickURL:
+            return quickRouteFrom(route)
+        case .dns:
+            return "\(route.hostname)\(route.targetPath == "/" ? "" : route.targetPath)"
+        case nil:
+            return "\(route.hostname)\(route.targetPath == "/" ? "" : route.targetPath)"
+        }
+    }
+
+    func selectRouteForSecurity(_ route: LocalProxyRoute, kind: TunnelMode) {
+        selectedSecurityRouteKind = kind
+        selectedSecurityRoute = normalizedRoute(route, wildcardHost: kind == .quickURL)
+        authHeaderSecret = selectedRouteSecurity.authHeaderSecret
+        newAllowlistEntry = ""
     }
 
     @discardableResult
@@ -934,6 +992,7 @@ final class TunnelBarViewModel: ObservableObject {
         saveSettings()
         if settings.quickRoutes.count != oldCount {
             stopQuickRouteSession(route)
+            syncSelectedSecurityRoute()
         }
     }
 
@@ -943,6 +1002,62 @@ final class TunnelBarViewModel: ObservableObject {
         saveSettings()
         if settings.dnsRoutes.count != oldCount {
             refreshDNSTunnelIfNeeded()
+            syncSelectedSecurityRoute()
+        }
+    }
+
+    private func updateSelectedSecurity(_ update: (inout RouteSecurity) -> Void) {
+        guard let kind = selectedSecurityRouteKind, let selectedRoute = selectedSecurityRoute else {
+            return
+        }
+
+        switch kind {
+        case .quickURL:
+            guard let index = settings.quickRoutes.firstIndex(where: { normalizedRoute($0, wildcardHost: true) == selectedRoute }) else {
+                syncSelectedSecurityRoute()
+                return
+            }
+            var route = settings.quickRoutes[index]
+            var security = route.security ?? RouteSecurity()
+            update(&security)
+            route.security = security.isEmpty ? nil : security
+            settings.quickRoutes[index] = route
+            selectedSecurityRoute = normalizedRoute(route, wildcardHost: true)
+        case .dns:
+            guard let index = settings.dnsRoutes.firstIndex(where: { normalizedRoute($0, wildcardHost: false) == selectedRoute }) else {
+                syncSelectedSecurityRoute()
+                return
+            }
+            var route = settings.dnsRoutes[index]
+            var security = route.security ?? RouteSecurity()
+            update(&security)
+            route.security = security.isEmpty ? nil : security
+            settings.dnsRoutes[index] = route
+            selectedSecurityRoute = normalizedRoute(route, wildcardHost: false)
+        }
+
+        authHeaderSecret = selectedRouteSecurity.authHeaderSecret
+        updateAccessPolicy()
+        saveSettings()
+    }
+
+    private func syncSelectedSecurityRoute() {
+        guard let kind = selectedSecurityRouteKind, let selectedRoute = selectedSecurityRoute else {
+            return
+        }
+
+        switch kind {
+        case .quickURL:
+            selectedSecurityRoute = activeQuickRoutes.first { $0 == selectedRoute }
+        case .dns:
+            selectedSecurityRoute = activeDNSRoutes.first { $0 == selectedRoute }
+        }
+
+        if selectedSecurityRoute == nil {
+            selectedSecurityRouteKind = nil
+            authHeaderSecret = ""
+        } else {
+            authHeaderSecret = selectedRouteSecurity.authHeaderSecret
         }
     }
 
@@ -1383,6 +1498,10 @@ final class TunnelBarViewModel: ObservableObject {
         )
     }
 
+    private func updateRouteSecurityPolicies() {
+        routeSecurityPolicies.update(routes: activeQuickRoutes + activeDNSRoutes)
+    }
+
     private func addRecentPort(_ port: Int) {
         settings.recentPorts.removeAll { $0 == port }
         settings.recentPorts.insert(port, at: 0)
@@ -1549,7 +1668,8 @@ final class TunnelBarViewModel: ObservableObject {
         return LocalProxyRoute(
             hostname: wildcardHost ? "" : route.hostname.trimmingCharacters(in: .whitespacesAndNewlines),
             targetPort: route.targetPort,
-            targetPath: path
+            targetPath: path,
+            security: route.security
         )
     }
 
@@ -1682,14 +1802,14 @@ struct NativeMenuContentView: View {
         } else {
             ForEach(model.activeQuickRoutes.prefix(2), id: \.self) { route in
                 Button {
-                    openRoutesWindow()
+                    openRouteSecurity(route, kind: .quickURL)
                 } label: {
                     routeMenuLabel(forQuickRoute: route)
                 }
             }
             ForEach(model.activeDNSRoutes.prefix(2), id: \.self) { route in
                 Button {
-                    openRoutesWindow()
+                    openRouteSecurity(route, kind: .dns)
                 } label: {
                     routeMenuLabel(forDNSRoute: route)
                 }
@@ -1701,14 +1821,14 @@ struct NativeMenuContentView: View {
     private var allRouteItems: some View {
         ForEach(model.activeQuickRoutes, id: \.self) { route in
             Button {
-                openRoutesWindow()
+                openRouteSecurity(route, kind: .quickURL)
             } label: {
                 routeMenuLabel(forQuickRoute: route)
             }
         }
         ForEach(model.activeDNSRoutes, id: \.self) { route in
             Button {
-                openRoutesWindow()
+                openRouteSecurity(route, kind: .dns)
             } label: {
                 routeMenuLabel(forDNSRoute: route)
             }
@@ -1785,6 +1905,12 @@ struct NativeMenuContentView: View {
     }
 
     private func openSettingsWindow() {
+        model.selectedTab = .security
+        RoutingFlareWindowPresenter.shared.show(model: model)
+    }
+
+    private func openRouteSecurity(_ route: LocalProxyRoute, kind: TunnelMode) {
+        model.selectRouteForSecurity(route, kind: kind)
         model.selectedTab = .security
         RoutingFlareWindowPresenter.shared.show(model: model)
     }
@@ -2235,6 +2361,7 @@ struct MenuContentView: View {
 
     private var routesTable: some View {
         RoutesTableView(
+            model: model,
             quickRoutes: model.activeQuickRoutes,
             dnsRoutes: model.activeDNSRoutes,
             runningModes: model.runningModes,
@@ -2242,9 +2369,11 @@ struct MenuContentView: View {
             dnsUnavailableReason: model.dnsUnavailableReason,
             quickRouteFrom: { model.quickRouteFrom($0) },
             quickRouteIsPending: { model.quickRouteIsPending($0) },
+            selectQuickRoute: { model.selectRouteForSecurity($0, kind: .quickURL) },
+            selectDNSRoute: { model.selectRouteForSecurity($0, kind: .dns) },
             removeQuickRoute: { model.removeQuickRoute($0) },
             removeDNSRoute: { model.removeDNSRoute($0) },
-            tableHeight: showsTabs ? 86 : 260
+            tableHeight: showsTabs ? 120 : 620
         )
     }
 
@@ -2415,7 +2544,7 @@ struct MenuContentView: View {
                     Image(systemName: "plus")
                 }
             }
-            ForEach(model.settings.allowlistEntries, id: \.self) { entry in
+            ForEach(model.selectedRouteSecurity.allowlistEntries, id: \.self) { entry in
                 HStack {
                     Text(entry)
                     Spacer()
@@ -2432,8 +2561,27 @@ struct MenuContentView: View {
 
     private var securityControls: some View {
         VStack(alignment: .leading, spacing: 14) {
-            allowlistControls
-            authHeaderControls
+            if model.selectedSecurityRoute == nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Route Security")
+                        .font(AppTypography.sectionTitle)
+                    Text("Select a route from the routing table.")
+                        .font(AppTypography.content)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Route Security")
+                        .font(AppTypography.sectionTitle)
+                    Text(model.selectedRouteDisplayName)
+                        .font(AppTypography.content)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                allowlistControls
+                authHeaderControls
+            }
         }
         .onAppear {
             model.loadAuthHeaderSecretIfNeeded()
@@ -2455,24 +2603,27 @@ struct MenuContentView: View {
 
     private var authHeaderControls: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Toggle("Auth Header", isOn: $model.settings.authHeaderEnabled)
-                .onChange(of: model.settings.authHeaderEnabled) { _, _ in
-                    model.saveAuthHeaderSettings()
-                }
-            TextField("Header name", text: $model.settings.authHeaderName)
+            Toggle("Auth Header", isOn: Binding(
+                get: { model.selectedRouteSecurity.authHeaderEnabled },
+                set: { model.setSelectedAuthHeaderEnabled($0) }
+            ))
+            TextField("Header name", text: Binding(
+                get: { model.selectedRouteSecurity.authHeaderName },
+                set: { model.setSelectedAuthHeaderName($0) }
+            ))
                 .textFieldStyle(.roundedBorder)
-                .disabled(!model.settings.authHeaderEnabled)
+                .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
                 .onSubmit(model.saveAuthHeaderSettings)
             HStack(spacing: 6) {
                 if showsAuthSecret {
                     TextField("Secret", text: $model.authHeaderSecret)
                         .textFieldStyle(.roundedBorder)
-                        .disabled(!model.settings.authHeaderEnabled)
+                        .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
                         .onSubmit(model.saveAuthHeaderSettings)
                 } else {
                     SecureField("Secret", text: $model.authHeaderSecret)
                         .textFieldStyle(.roundedBorder)
-                        .disabled(!model.settings.authHeaderEnabled)
+                        .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
                         .onSubmit(model.saveAuthHeaderSettings)
                 }
                 Button {
@@ -2481,13 +2632,13 @@ struct MenuContentView: View {
                     Image(systemName: showsAuthSecret ? "eye.slash" : "eye")
                 }
                 .buttonStyle(.plain)
-                .disabled(!model.settings.authHeaderEnabled)
+                .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
                 .help(showsAuthSecret ? "Hide secret" : "Show secret")
             }
             Button(action: model.saveAuthHeaderSettings) {
                 Label("Save Auth Header", systemImage: "key.fill")
             }
-            .disabled(!model.settings.authHeaderEnabled)
+            .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
         }
     }
 
@@ -2548,6 +2699,7 @@ struct MenuContentView: View {
 private struct RoutesTableView: View {
     @State private var copiedValue: String?
 
+    @ObservedObject var model: TunnelBarViewModel
     let quickRoutes: [LocalProxyRoute]
     let dnsRoutes: [LocalProxyRoute]
     let runningModes: Set<TunnelMode>
@@ -2555,6 +2707,8 @@ private struct RoutesTableView: View {
     let dnsUnavailableReason: String?
     let quickRouteFrom: (LocalProxyRoute) -> String
     let quickRouteIsPending: (LocalProxyRoute) -> Bool
+    let selectQuickRoute: (LocalProxyRoute) -> Void
+    let selectDNSRoute: (LocalProxyRoute) -> Void
     let removeQuickRoute: (LocalProxyRoute) -> Void
     let removeDNSRoute: (LocalProxyRoute) -> Void
     let tableHeight: CGFloat
@@ -2574,25 +2728,37 @@ private struct RoutesTableView: View {
                         emptyState
                     } else {
                         ForEach(quickRoutes, id: \.self) { route in
-                            routeRow(
-                                from: quickRouteFrom(route),
-                                port: route.targetPort,
-                                isActive: runningModes.contains(.quickURL),
-                                isPending: quickRouteIsPending(route),
-                                statusText: nil,
-                                remove: { removeQuickRoute(route) }
-                            )
+                            VStack(alignment: .leading, spacing: 0) {
+                                routeRow(
+                                    from: quickRouteFrom(route),
+                                    port: route.targetPort,
+                                    isActive: runningModes.contains(.quickURL),
+                                    isPending: quickRouteIsPending(route),
+                                    statusText: nil,
+                                    select: { selectQuickRoute(route) },
+                                    remove: { removeQuickRoute(route) }
+                                )
+                                if isExpanded(route, kind: .quickURL) {
+                                    RouteSecurityInlineView(model: model)
+                                }
+                            }
                         }
 
                         ForEach(dnsRoutes, id: \.self) { route in
-                            routeRow(
-                                from: "\(route.hostname)\(displayPath(route.targetPath))",
-                                port: route.targetPort,
-                                isActive: runningModes.contains(.dns),
-                                isPending: dnsUnavailableReason != nil,
-                                statusText: runningModes.contains(.dns) ? nil : dnsUnavailableReason,
-                                remove: { removeDNSRoute(route) }
-                            )
+                            VStack(alignment: .leading, spacing: 0) {
+                                routeRow(
+                                    from: "\(route.hostname)\(displayPath(route.targetPath))",
+                                    port: route.targetPort,
+                                    isActive: runningModes.contains(.dns),
+                                    isPending: dnsUnavailableReason != nil,
+                                    statusText: runningModes.contains(.dns) ? nil : dnsUnavailableReason,
+                                    select: { selectDNSRoute(route) },
+                                    remove: { removeDNSRoute(route) }
+                                )
+                                if isExpanded(route, kind: .dns) {
+                                    RouteSecurityInlineView(model: model)
+                                }
+                            }
                         }
                     }
                 }
@@ -2644,6 +2810,7 @@ private struct RoutesTableView: View {
         isActive: Bool,
         isPending: Bool,
         statusText: String?,
+        select: @escaping () -> Void,
         remove: @escaping () -> Void
     ) -> some View {
         let target = "127.0.0.1:\(String(port))"
@@ -2674,8 +2841,14 @@ private struct RoutesTableView: View {
             .buttonStyle(.plain)
             .frame(width: actionColumnWidth, height: 28)
         }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: select)
         .frame(height: 52)
         .padding(.horizontal, tableInset)
+    }
+
+    private func isExpanded(_ route: LocalProxyRoute, kind: TunnelMode) -> Bool {
+        model.selectedSecurityRouteKind == kind && model.selectedSecurityRoute == route
     }
 
     private func copyableText(_ value: String, width: CGFloat?, truncationMode: Text.TruncationMode) -> some View {
@@ -2748,6 +2921,100 @@ private struct RoutesTableView: View {
 
     private func displayPath(_ path: String) -> String {
         path == "/" ? "" : path
+    }
+}
+
+private struct RouteSecurityInlineView: View {
+    @ObservedObject var model: TunnelBarViewModel
+    @State private var showsSecret = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Divider()
+            allowlist
+            authHeader
+        }
+        .padding(.leading, 38)
+        .padding(.trailing, 38)
+        .padding(.vertical, 12)
+    }
+
+    private var allowlist: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Inbound IP Allowlist")
+                .font(AppTypography.contentStrong)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                TextField("203.0.113.10 or 198.51.100.0/24", text: $model.newAllowlistEntry)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(model.addAllowlistEntry)
+                Button(action: model.addAllowlistEntry) {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            if model.selectedRouteSecurity.allowlistEntries.isEmpty {
+                Text("Allow all inbound IPs")
+                    .font(AppTypography.content)
+                    .foregroundStyle(.tertiary)
+            } else {
+                ForEach(model.selectedRouteSecurity.allowlistEntries, id: \.self) { entry in
+                    HStack {
+                        Text(entry)
+                            .font(AppTypography.content)
+                        Spacer()
+                        Button {
+                            model.removeAllowlistEntry(entry)
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
+    private var authHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Auth Header", isOn: Binding(
+                get: { model.selectedRouteSecurity.authHeaderEnabled },
+                set: { model.setSelectedAuthHeaderEnabled($0) }
+            ))
+            .font(AppTypography.contentStrong)
+
+            TextField("Header name", text: Binding(
+                get: { model.selectedRouteSecurity.authHeaderName },
+                set: { model.setSelectedAuthHeaderName($0) }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
+            .onSubmit(model.saveAuthHeaderSettings)
+
+            HStack(spacing: 8) {
+                if showsSecret {
+                    TextField("Secret", text: $model.authHeaderSecret)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
+                        .onSubmit(model.saveAuthHeaderSettings)
+                } else {
+                    SecureField("Secret", text: $model.authHeaderSecret)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
+                        .onSubmit(model.saveAuthHeaderSettings)
+                }
+                Button {
+                    showsSecret.toggle()
+                } label: {
+                    Image(systemName: showsSecret ? "eye.slash" : "eye")
+                }
+                .buttonStyle(.plain)
+                .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
+
+                Button("Save", action: model.saveAuthHeaderSettings)
+                    .disabled(!model.selectedRouteSecurity.authHeaderEnabled)
+            }
+        }
     }
 }
 

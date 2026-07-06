@@ -42,6 +42,8 @@ struct RoutingFlareCLI {
             print("Sent \(first) to routingflare.")
         case "settings":
             try settings(Array(command.dropFirst()))
+        case "security":
+            try routeSecurity(Array(command.dropFirst()))
         case "update":
             try updateFromCLI()
         case "autostart":
@@ -292,14 +294,14 @@ struct RoutingFlareCLI {
             let normalized = normalizedRoute(route, kind: .quickURL)
             let entry = statusEntry(for: normalized, kind: .quickURL, snapshot: snapshot)
             let from = entry?.publicURL.flatMap { URL(string: $0)?.host } ?? "random dns"
-            return "\(from)\(normalized.normalizedTargetPath == "/" ? "" : normalized.normalizedTargetPath) to 127.0.0.1:\(normalized.targetPort)\(statusSuffix(for: entry))"
+            return "\(from)\(normalized.normalizedTargetPath == "/" ? "" : normalized.normalizedTargetPath) to 127.0.0.1:\(normalized.targetPort)\(securitySuffix(for: normalized))\(statusSuffix(for: entry))"
         })
 
         print("\nDNS")
         printRoutes(settings.dnsRoutes, from: { route in
             let normalized = normalizedRoute(route, kind: .dns)
             let entry = statusEntry(for: normalized, kind: .dns, snapshot: snapshot)
-            return "\(normalized.hostname)\(normalized.normalizedTargetPath == "/" ? "" : normalized.normalizedTargetPath) -> 127.0.0.1:\(normalized.targetPort)\(statusSuffix(for: entry))"
+            return "\(normalized.hostname)\(normalized.normalizedTargetPath == "/" ? "" : normalized.normalizedTargetPath) -> 127.0.0.1:\(normalized.targetPort)\(securitySuffix(for: normalized))\(statusSuffix(for: entry))"
         })
 
         print("\nOptions")
@@ -307,6 +309,124 @@ struct RoutingFlareCLI {
         print("  cloudflared: \(settings.cloudflaredPath.isEmpty ? "auto-detect" : settings.cloudflaredPath)")
         print("  allowlist: \(settings.allowlistEntries.isEmpty ? "allow all" : settings.allowlistEntries.joined(separator: ", "))")
         print("  authHeader: \(settings.authHeaderEnabled ? "on" : "off")")
+    }
+
+    private func routeSecurity(_ arguments: [String]) throws {
+        guard arguments.count >= 3 else {
+            throw CLIError.message("Usage: routingflare security random|dns <index> show|allowlist|auth ...")
+        }
+        let type = arguments[0]
+        guard let index = Int(arguments[1]), index > 0 else {
+            throw CLIError.message("Index must be a positive number.")
+        }
+        let action = arguments[2]
+        let rest = Array(arguments.dropFirst(3))
+        var settings = store.load()
+        let changed: Bool
+
+        switch type {
+        case "random", "quick":
+            changed = try updateRouteSecurity(action: action, arguments: rest, index: index, routes: &settings.quickRoutes, label: "random DNS")
+        case "dns":
+            changed = try updateRouteSecurity(action: action, arguments: rest, index: index, routes: &settings.dnsRoutes, label: "DNS")
+        default:
+            throw CLIError.message("Usage: routingflare security random|dns <index> show|allowlist|auth ...")
+        }
+
+        if changed {
+            store.save(settings)
+            sendAppCommand("reload")
+        }
+    }
+
+    private func updateRouteSecurity(
+        action: String,
+        arguments: [String],
+        index: Int,
+        routes: inout [LocalProxyRoute],
+        label: String
+    ) throws -> Bool {
+        guard routes.indices.contains(index - 1) else {
+            throw CLIError.message("No \(label) route at index \(index).")
+        }
+
+        var route = routes[index - 1]
+        var security = route.security ?? RouteSecurity()
+
+        switch action {
+        case "show", "get":
+            printRouteSecurity(security, label: "\(label) route \(index)")
+            return false
+        case "allowlist":
+            try updateRouteAllowlist(&security, arguments: arguments)
+        case "auth":
+            try updateRouteAuth(&security, arguments: arguments)
+        default:
+            throw CLIError.message("Usage: routingflare security random|dns <index> show|allowlist|auth ...")
+        }
+
+        route.security = security.isEmpty ? nil : security
+        routes[index - 1] = route
+        print("Updated \(label) route \(index) security.")
+        return true
+    }
+
+    private func updateRouteAllowlist(_ security: inout RouteSecurity, arguments: [String]) throws {
+        guard let action = arguments.first else {
+            throw CLIError.message("Usage: routingflare security <type> <index> allowlist add|remove|clear [entry]")
+        }
+        switch action {
+        case "add":
+            guard let entry = arguments.dropFirst().first?.trimmingCharacters(in: .whitespacesAndNewlines), !entry.isEmpty else {
+                throw CLIError.message("Usage: routingflare security <type> <index> allowlist add <ip-or-cidr>")
+            }
+            _ = try IPAllowlist(entries: [entry])
+            if !security.allowlistEntries.contains(entry) {
+                security.allowlistEntries.append(entry)
+            }
+        case "remove", "rm":
+            guard let entry = arguments.dropFirst().first?.trimmingCharacters(in: .whitespacesAndNewlines), !entry.isEmpty else {
+                throw CLIError.message("Usage: routingflare security <type> <index> allowlist remove <ip-or-cidr>")
+            }
+            security.allowlistEntries.removeAll { $0 == entry }
+        case "clear":
+            security.allowlistEntries.removeAll()
+        default:
+            throw CLIError.message("Usage: routingflare security <type> <index> allowlist add|remove|clear [entry]")
+        }
+    }
+
+    private func updateRouteAuth(_ security: inout RouteSecurity, arguments: [String]) throws {
+        guard let action = arguments.first else {
+            throw CLIError.message("Usage: routingflare security <type> <index> auth on|off|set [--name header] [--secret value]")
+        }
+        let options = parseOptions(Array(arguments.dropFirst()))
+
+        switch action {
+        case "on", "enable":
+            security.authHeaderEnabled = true
+        case "off", "disable":
+            security.authHeaderEnabled = false
+        case "set":
+            break
+        default:
+            throw CLIError.message("Usage: routingflare security <type> <index> auth on|off|set [--name header] [--secret value]")
+        }
+
+        if let name = options["name"]?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            security.authHeaderName = name
+        }
+        if let secret = options["secret"] {
+            security.authHeaderSecret = secret
+        }
+    }
+
+    private func printRouteSecurity(_ security: RouteSecurity, label: String) {
+        print(label)
+        print("  allowlist: \(security.allowlistEntries.isEmpty ? "allow all" : security.allowlistEntries.joined(separator: ", "))")
+        print("  auth header: \(security.authHeaderEnabled ? "on" : "off")")
+        print("  auth header name: \(security.authHeaderName)")
+        print("  auth secret: \(security.authHeaderSecret.isEmpty ? "not set" : "set")")
     }
 
     private func updateFromCLI() throws {
@@ -469,6 +589,13 @@ struct RoutingFlareCLI {
         }
     }
 
+    private func securitySuffix(for route: LocalProxyRoute) -> String {
+        guard let security = route.security, !security.isEmpty else {
+            return ""
+        }
+        return " [secured]"
+    }
+
     private func messageSuffix(_ message: String?) -> String {
         guard let message = message?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty else {
             return ""
@@ -480,7 +607,8 @@ struct RoutingFlareCLI {
         LocalProxyRoute(
             hostname: kind == .quickURL ? "" : route.hostname.trimmingCharacters(in: .whitespacesAndNewlines),
             targetPort: route.targetPort,
-            targetPath: normalizedPath(route.targetPath)
+            targetPath: normalizedPath(route.targetPath),
+            security: route.security
         )
     }
 
@@ -571,11 +699,9 @@ struct RoutingFlareCLI {
           routingflare settings set --autostart on
           routingflare settings set --cloudflared /opt/homebrew/bin/cloudflared
           routingflare settings set --dns-tunnel-id <id> --dns-credentials ~/.cloudflared/<id>.json
-          routingflare settings allowlist add 203.0.113.10
-          routingflare settings allowlist remove 203.0.113.10
-          routingflare settings allowlist clear
-          routingflare settings auth on --name X-Routingflare-Secret --secret value
-          routingflare settings auth off
+          routingflare security random 1 allowlist add 203.0.113.10
+          routingflare security random 1 auth on --name X-Routingflare-Secret --secret value
+          routingflare security dns 1 show
           routingflare update
           routingflare autostart on|off
           routingflare cloudflared /path/to/cloudflared

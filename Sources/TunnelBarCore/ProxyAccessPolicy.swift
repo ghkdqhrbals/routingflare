@@ -5,10 +5,12 @@ public enum ProxyAccessDecision: Equatable {
     case blocked(sourceIP: String?)
 }
 
-public struct ProxyAccessPolicy {
+public struct ProxyAccessPolicy: @unchecked Sendable {
     private let entries: [String]
     private let allowlist: IPAllowlist?
     private let authHeader: ProxyAuthHeader
+
+    public static let allowAll = ProxyAccessPolicy(allowlistEntries: [])
 
     public init(allowlistEntries: [String], authHeader: ProxyAuthHeader = .disabled) {
         self.entries = allowlistEntries
@@ -58,6 +60,40 @@ public struct ProxyAccessPolicy {
     }
 }
 
+public struct RouteSecurity: Codable, Equatable, Hashable, Sendable {
+    public var allowlistEntries: [String]
+    public var authHeaderEnabled: Bool
+    public var authHeaderName: String
+    public var authHeaderSecret: String
+
+    public init(
+        allowlistEntries: [String] = [],
+        authHeaderEnabled: Bool = false,
+        authHeaderName: String = "X-Routingflare-Secret",
+        authHeaderSecret: String = ""
+    ) {
+        self.allowlistEntries = allowlistEntries
+        self.authHeaderEnabled = authHeaderEnabled
+        self.authHeaderName = authHeaderName
+        self.authHeaderSecret = authHeaderSecret
+    }
+
+    public var isEmpty: Bool {
+        allowlistEntries.isEmpty && !authHeaderEnabled && authHeaderSecret.isEmpty
+    }
+
+    public var accessPolicy: ProxyAccessPolicy {
+        ProxyAccessPolicy(
+            allowlistEntries: allowlistEntries,
+            authHeader: ProxyAuthHeader(
+                enabled: authHeaderEnabled,
+                name: authHeaderName,
+                secret: authHeaderSecret
+            )
+        )
+    }
+}
+
 public struct ProxyAuthHeader: Equatable, Sendable {
     public let enabled: Bool
     public let name: String
@@ -99,12 +135,49 @@ public final class MutableProxyAccessPolicy {
         lock.unlock()
     }
 
-    public func decision(for headers: [String: String]) -> ProxyAccessDecision {
+    public func currentPolicy() -> ProxyAccessPolicy {
         lock.lock()
         let currentPolicy = policy
         lock.unlock()
-        return currentPolicy.decision(for: headers)
+        return currentPolicy
+    }
+
+    public func decision(for headers: [String: String]) -> ProxyAccessDecision {
+        currentPolicy().decision(for: headers)
     }
 }
 
 extension MutableProxyAccessPolicy: @unchecked Sendable {}
+
+public final class MutableRouteSecurityPolicies {
+    private let lock = NSLock()
+    private var policies: [LocalProxyRoute: RouteSecurity] = [:]
+
+    public init(routes: [LocalProxyRoute] = []) {
+        update(routes: routes)
+    }
+
+    public func update(routes: [LocalProxyRoute]) {
+        let nextPolicies: [LocalProxyRoute: RouteSecurity] = Dictionary(uniqueKeysWithValues: routes.compactMap { route -> (LocalProxyRoute, RouteSecurity)? in
+            guard let security = route.security, !security.isEmpty else {
+                return nil
+            }
+            return (route, security)
+        })
+        lock.lock()
+        policies = nextPolicies
+        lock.unlock()
+    }
+
+    public func accessPolicy(for route: LocalProxyRoute, defaultPolicy: ProxyAccessPolicy) -> ProxyAccessPolicy {
+        lock.lock()
+        let security = policies[route]
+        lock.unlock()
+        guard let security else {
+            return defaultPolicy
+        }
+        return security.accessPolicy
+    }
+}
+
+extension MutableRouteSecurityPolicies: @unchecked Sendable {}

@@ -19,6 +19,7 @@ public final class LocalFilteringProxy {
     private let targetPort: Int
     private let routes: [LocalProxyRoute]
     private let accessPolicy: MutableProxyAccessPolicy
+    private let routeSecurityPolicies: MutableRouteSecurityPolicies
     private let queue = DispatchQueue(label: "TunnelBar.LocalFilteringProxy")
     private let logHandler: @Sendable (String) -> Void
     private var listener: NWListener?
@@ -28,11 +29,13 @@ public final class LocalFilteringProxy {
     public init(
         targetPort: Int,
         accessPolicy: MutableProxyAccessPolicy,
+        routeSecurityPolicies: MutableRouteSecurityPolicies = MutableRouteSecurityPolicies(),
         logHandler: @escaping @Sendable (String) -> Void
     ) {
         self.targetPort = targetPort
         self.routes = []
         self.accessPolicy = accessPolicy
+        self.routeSecurityPolicies = routeSecurityPolicies
         self.logHandler = logHandler
     }
 
@@ -40,11 +43,13 @@ public final class LocalFilteringProxy {
         routes: [LocalProxyRoute],
         fallbackTargetPort: Int,
         accessPolicy: MutableProxyAccessPolicy,
+        routeSecurityPolicies: MutableRouteSecurityPolicies = MutableRouteSecurityPolicies(),
         logHandler: @escaping @Sendable (String) -> Void
     ) {
         self.targetPort = fallbackTargetPort
         self.routes = routes
         self.accessPolicy = accessPolicy
+        self.routeSecurityPolicies = routeSecurityPolicies
         self.logHandler = logHandler
     }
 
@@ -110,7 +115,14 @@ public final class LocalFilteringProxy {
     }
 
     private func forward(_ request: HTTPProxyRequest, connection: NWConnection) {
-        let decision = accessPolicy.decision(for: request.headers)
+        guard let targetRoute = route(for: request) else {
+            send(status: 404, body: "Not Found", to: connection)
+            return
+        }
+
+        let decision = routeSecurityPolicies
+            .accessPolicy(for: targetRoute, defaultPolicy: accessPolicy.currentPolicy())
+            .decision(for: request.headers)
         guard case .allowed(let sourceIP) = decision else {
             let blockedIP: String
             if case .blocked(let ip) = decision {
@@ -118,13 +130,8 @@ public final class LocalFilteringProxy {
             } else {
                 blockedIP = "unknown"
             }
-            logHandler("Blocked request from \(blockedIP)")
+            logHandler("Blocked request from \(blockedIP) to :\(targetRoute.targetPort)\(request.path)")
             send(status: 403, body: "Forbidden", to: connection)
-            return
-        }
-
-        guard let targetRoute = route(for: request) else {
-            send(status: 404, body: "Not Found", to: connection)
             return
         }
 
@@ -218,15 +225,24 @@ public struct LocalProxyRoute: Codable, Equatable, Hashable, Sendable {
     public var hostname: String
     public var targetPort: Int
     public var targetPath: String
+    public var security: RouteSecurity?
 
-    public init(hostname: String, targetPort: Int, targetPath: String) {
+    public init(hostname: String, targetPort: Int, targetPath: String, security: RouteSecurity? = nil) {
         self.hostname = hostname
         self.targetPort = targetPort
         self.targetPath = targetPath
+        self.security = security
     }
 
     public var normalizedTargetPath: String {
         targetPath.isEmpty ? "/" : (targetPath.hasPrefix("/") ? targetPath : "/" + targetPath)
+    }
+
+    public func accessPolicy(defaultPolicy: ProxyAccessPolicy) -> ProxyAccessPolicy {
+        guard let security, !security.isEmpty else {
+            return defaultPolicy
+        }
+        return security.accessPolicy
     }
 
     public func matches(host: String, path: String) -> Bool {
@@ -239,6 +255,18 @@ public struct LocalProxyRoute: Codable, Equatable, Hashable, Sendable {
             return true
         }
         return path == normalizedPath || path.hasPrefix(normalizedPath + "/")
+    }
+
+    public static func == (lhs: LocalProxyRoute, rhs: LocalProxyRoute) -> Bool {
+        lhs.hostname == rhs.hostname &&
+        lhs.targetPort == rhs.targetPort &&
+        lhs.normalizedTargetPath == rhs.normalizedTargetPath
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(hostname)
+        hasher.combine(targetPort)
+        hasher.combine(normalizedTargetPath)
     }
 }
 
