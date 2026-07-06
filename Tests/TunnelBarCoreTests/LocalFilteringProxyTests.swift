@@ -146,6 +146,41 @@ final class LocalFilteringProxyTests: XCTestCase {
         XCTAssertEqual(allowedAdmin.body, "admin")
     }
 
+    func testResponseHeaderFilterRemovesHopByHopHeaders() {
+        let headers = [
+            "Content-Type": "application/json",
+            "Content-Length": "128",
+            "Connection": "X-Origin-Hop, keep-alive",
+            "X-Origin-Hop": "remove-me",
+            "Transfer-Encoding": "Identity",
+            "Keep-Alive": "timeout=5",
+            "TE": "trailers",
+            "Trailer": "Expires",
+            "Upgrade": "websocket",
+            "Proxy-Authenticate": "Basic",
+            "Proxy-Authorization": "Basic token",
+            "X-App": "ok"
+        ]
+
+        let filtered = Dictionary(
+            uniqueKeysWithValues: HTTPProxyHeaderFilter.responseHeaders(from: headers)
+                .map { ($0.key.lowercased(), $0.value) }
+        )
+
+        XCTAssertEqual(filtered["content-type"], "application/json")
+        XCTAssertEqual(filtered["x-app"], "ok")
+        XCTAssertNil(filtered["content-length"])
+        XCTAssertNil(filtered["connection"])
+        XCTAssertNil(filtered["x-origin-hop"])
+        XCTAssertNil(filtered["transfer-encoding"])
+        XCTAssertNil(filtered["keep-alive"])
+        XCTAssertNil(filtered["te"])
+        XCTAssertNil(filtered["trailer"])
+        XCTAssertNil(filtered["upgrade"])
+        XCTAssertNil(filtered["proxy-authenticate"])
+        XCTAssertNil(filtered["proxy-authorization"])
+    }
+
     private func request(
         proxyPort: Int,
         host: String,

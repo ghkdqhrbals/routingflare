@@ -191,7 +191,7 @@ public final class LocalFilteringProxy {
         var response = "HTTP/1.1 \(status) \(reasonPhrase(for: status))\r\n"
         response += "Content-Length: \(bodyData.count)\r\n"
         response += "Connection: close\r\n"
-        for (key, value) in headers where key.lowercased() != "content-length" && key.lowercased() != "connection" {
+        for (key, value) in HTTPProxyHeaderFilter.responseHeaders(from: headers) {
             response += "\(key): \(value)\r\n"
         }
         response += "\r\n"
@@ -220,6 +220,37 @@ public final class LocalFilteringProxy {
 }
 
 extension LocalFilteringProxy: @unchecked Sendable {}
+
+enum HTTPProxyHeaderFilter {
+    private static let excludedResponseHeaders: Set<String> = [
+        "connection",
+        "content-length",
+        "transfer-encoding",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailer",
+        "upgrade"
+    ]
+
+    static func responseHeaders(from headers: [String: String]) -> [(key: String, value: String)] {
+        let connectionHeaderTokens = headers.flatMap { key, value -> [String] in
+            guard key.caseInsensitiveCompare("connection") == .orderedSame else {
+                return []
+            }
+            return value
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                .filter { !$0.isEmpty }
+        }
+        let excludedHeaders = excludedResponseHeaders.union(connectionHeaderTokens)
+
+        return headers.filter { key, _ in
+            !excludedHeaders.contains(key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+        }
+    }
+}
 
 public struct LocalProxyRoute: Codable, Equatable, Hashable, Sendable {
     public var hostname: String
