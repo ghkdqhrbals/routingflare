@@ -106,10 +106,11 @@ private struct TunnelStartError: LocalizedError {
 }
 
 private enum AppTypography {
-    static let title = Font.system(size: 30, weight: .semibold)
-    static let sectionTitle = Font.system(size: 17, weight: .semibold)
-    static let content = Font.system(size: 14, weight: .medium)
+    static let title = Font.system(size: 28, weight: .semibold)
+    static let sectionTitle = Font.system(size: 16, weight: .semibold)
+    static let content = Font.system(size: 14, weight: .regular)
     static let contentStrong = Font.system(size: 14, weight: .semibold)
+    static let meta = Font.system(size: 12, weight: .medium)
 }
 
 enum AppTab: String, CaseIterable, Identifiable {
@@ -2312,31 +2313,31 @@ struct AppWindowView: View {
     var body: some View {
         HSplitView {
             sidebar
-                .frame(minWidth: 180, idealWidth: 220, maxWidth: 340, maxHeight: .infinity)
+                .frame(minWidth: 206, idealWidth: 220, maxWidth: 260, maxHeight: .infinity)
 
             detail
                 .frame(minWidth: 640, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .padding(.top, 18)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 20) {
             windowHeader
-                .padding(.horizontal, 16)
-                .padding(.top, 18)
+                .padding(.horizontal, 18)
+                .padding(.top, 54)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 8) {
                     ForEach(AppTab.allCases) { tab in
                         sidebarRow(tab)
                     }
                 }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 14)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 18)
             }
         }
-        .background(.regularMaterial)
+        .background(Color(nsColor: .underPageBackgroundColor).opacity(0.72))
     }
 
     private var detail: some View {
@@ -2355,22 +2356,24 @@ struct AppWindowView: View {
             .padding(0)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .padding(28)
+        .padding(.top, 54)
+        .padding(.horizontal, 34)
+        .padding(.bottom, 28)
     }
 
     private func sidebarRow(_ tab: AppTab) -> some View {
         Button {
             model.selectTab(tab)
         } label: {
-            HStack(spacing: 10) {
+            HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(tab.label)
-                        .font(.system(size: 14, weight: model.selectedTab == tab ? .semibold : .regular))
+                        .font(.system(size: 15, weight: model.selectedTab == tab ? .semibold : .medium))
                         .lineLimit(1)
                         .truncationMode(.tail)
                     if let subtitle = tab.subtitle {
-                        Text(subtitle)
-                            .font(.caption)
+                        Text(subtitle.lowercased())
+                            .font(AppTypography.meta)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                             .truncationMode(.tail)
@@ -2378,14 +2381,14 @@ struct AppWindowView: View {
                 }
                 Spacer()
             }
-            .frame(maxWidth: .infinity, minHeight: tab.subtitle == nil ? 34 : 44, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
             .foregroundStyle(model.selectedTab == tab ? .white : .primary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 2)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 4)
             .contentShape(Rectangle())
             .background {
                 if model.selectedTab == tab {
-                    RoundedRectangle(cornerRadius: 7)
+                    RoundedRectangle(cornerRadius: 8)
                         .fill(Color.accentColor)
                 }
             }
@@ -2405,7 +2408,7 @@ struct AppWindowView: View {
                     .truncationMode(.tail)
                 Text(model.status.label)
                     .foregroundStyle(.secondary)
-                    .font(.caption)
+                    .font(AppTypography.meta)
             }
             Spacer()
         }
@@ -2507,28 +2510,31 @@ struct MenuContentView: View {
     }
 
     private var quickRouteForm: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Add Random DNS")
-                .font(AppTypography.sectionTitle)
-            Text("Closing and reopening a random DNS route assigns a new public address.")
-                .font(AppTypography.content)
-                .foregroundStyle(.secondary)
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 14) {
+            pageSectionHeader(
+                "Add Random DNS",
+                note: "Reopening a closed random DNS route creates a new public address."
+            )
+            HStack(spacing: 10) {
                 TextField("8989", text: $model.newQuickPortText)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 90)
+                    .font(AppTypography.content)
+                    .frame(width: 104)
                     .onChange(of: model.newQuickPortText) { _, value in
                         model.newQuickPortText = digitsOnly(value)
                     }
                 TextField("/console", text: $model.newQuickPathText)
                     .textFieldStyle(.roundedBorder)
+                    .font(AppTypography.content)
                     .onSubmit(addQuickRouteAndShowRouting)
                 Button(action: addQuickRouteAndShowRouting) {
                     Image(systemName: "plus")
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .controlSize(.regular)
+                .frame(width: 38)
             }
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -2545,41 +2551,60 @@ struct MenuContentView: View {
 
     @ViewBuilder
     private var dnsControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Tunnel")
-                .font(AppTypography.sectionTitle)
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
+            pageSectionHeader("Tunnel", note: nil)
             TextField("Tunnel ID, e.g. 24c83c3f-...", text: $model.settings.dnsTunnelID)
                 .textFieldStyle(.roundedBorder)
+                .font(AppTypography.content)
                 .onSubmit(model.saveSettings)
             TextField("Credentials file, e.g. ~/.cloudflared/<id>.json", text: $model.settings.dnsCredentialsFile)
                 .textFieldStyle(.roundedBorder)
+                .font(AppTypography.content)
                 .onSubmit(model.saveSettings)
         }
     }
 
     private var dnsRouteForm: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Add DNS")
-                .font(AppTypography.sectionTitle)
-                .foregroundStyle(.secondary)
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 14) {
+            pageSectionHeader("Add DNS", note: nil)
+            HStack(spacing: 10) {
                 TextField("dev.example.com", text: $model.newDNSHostname)
                     .textFieldStyle(.roundedBorder)
+                    .font(AppTypography.content)
+                    .frame(minWidth: 180)
                 TextField("8989", text: $model.newDNSPortText)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 90)
+                    .font(AppTypography.content)
+                    .frame(width: 104)
                     .onChange(of: model.newDNSPortText) { _, value in
                         model.newDNSPortText = digitsOnly(value)
                     }
                 TextField("/console", text: $model.newDNSPathText)
                     .textFieldStyle(.roundedBorder)
+                    .font(AppTypography.content)
+                    .frame(minWidth: 150)
                 Button(action: addDNSRouteAndShowRouting) {
                     Image(systemName: "plus")
                 }
                 .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+                .controlSize(.regular)
+                .frame(width: 38)
                 .disabled(!model.canAddDNSRoute)
+            }
+        }
+    }
+
+    private func pageSectionHeader(_ title: String, note: String?) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(AppTypography.sectionTitle)
+                .foregroundStyle(.primary)
+            if let note {
+                Text(note)
+                    .font(AppTypography.meta)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -2658,12 +2683,11 @@ struct MenuContentView: View {
     }
 
     private var optionsControls: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 8) {
-                Text("Startup")
-                    .font(AppTypography.sectionTitle)
-                    .foregroundStyle(.secondary)
+                pageSectionHeader("Startup", note: nil)
                 Toggle("Start routes when routingflare opens", isOn: $model.settings.autoStart)
+                    .font(AppTypography.content)
                     .onChange(of: model.settings.autoStart) { _, _ in model.saveSettings() }
             }
             installControls
@@ -2745,17 +2769,15 @@ struct MenuContentView: View {
     }
 
     private var logsView: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Logs")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
+            pageSectionHeader("Logs", note: nil)
             ScrollView {
                 Text(model.logs.suffix(20).joined(separator: "\n"))
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(.system(size: 12, design: .monospaced))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
-            .frame(minHeight: 320)
+            .frame(minHeight: 420)
         }
     }
 }
@@ -2782,17 +2804,17 @@ private struct RoutesTableView: View {
     let tableHeight: CGFloat?
 
     private let statusColumnWidth: CGFloat = 16
-    private let targetColumnWidth: CGFloat = 148
-    private let toggleColumnWidth: CGFloat = 74
-    private let actionColumnWidth: CGFloat = 28
-    private let columnSpacing: CGFloat = 12
-    private let tableInset: CGFloat = 10
+    private let targetColumnWidth: CGFloat = 178
+    private let toggleColumnWidth: CGFloat = 68
+    private let actionColumnWidth: CGFloat = 30
+    private let columnSpacing: CGFloat = 14
+    private let tableInset: CGFloat = 12
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             tableHeader
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 6) {
                     if quickRoutes.isEmpty && dnsRoutes.isEmpty {
                         emptyState
                     } else {
@@ -2868,23 +2890,26 @@ private struct RoutesTableView: View {
     }
 
     private var tableHeader: some View {
-        HStack(spacing: columnSpacing) {
-            Text("")
-                .frame(width: statusColumnWidth)
-            Text("From")
-                .font(AppTypography.contentStrong)
-                .foregroundStyle(.tertiary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text("To")
-                .font(AppTypography.contentStrong)
-                .foregroundStyle(.tertiary)
-                .frame(width: targetColumnWidth, alignment: .leading)
-            Text("")
-                .frame(width: toggleColumnWidth)
-            Text("")
-                .frame(width: actionColumnWidth)
+        VStack(spacing: 8) {
+            HStack(spacing: columnSpacing) {
+                Text("")
+                    .frame(width: statusColumnWidth)
+                Text("From")
+                    .font(AppTypography.meta)
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text("To")
+                    .font(AppTypography.meta)
+                    .foregroundStyle(.tertiary)
+                    .frame(width: targetColumnWidth, alignment: .leading)
+                Text("")
+                    .frame(width: toggleColumnWidth)
+                Text("")
+                    .frame(width: actionColumnWidth)
+            }
+            .padding(.horizontal, tableInset)
+            Divider()
         }
-        .padding(.horizontal, tableInset)
     }
 
     private func routeRow(
@@ -2908,31 +2933,33 @@ private struct RoutesTableView: View {
                         .frame(width: 8, height: 8)
                         .frame(width: statusColumnWidth)
                     VStack(alignment: .leading, spacing: 2) {
-                        routeLineText(from, width: nil, truncationMode: .middle)
+                        routeLineText(from, width: nil, truncationMode: .middle, primary: true)
                         if let statusText {
                             tooltippedText(
                                 statusText,
                                 width: nil,
                                 truncationMode: .tail,
-                                font: .caption,
+                                font: AppTypography.meta,
                                 foregroundStyle: .orange,
                                 copyable: false
                             )
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    routeLineText(target, width: targetColumnWidth, truncationMode: .tail)
+                    routeLineText(target, width: targetColumnWidth, truncationMode: .tail, primary: false)
                 }
                 .padding(.leading, tableInset)
                 .padding(.trailing, columnSpacing)
-                .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             Button(isRouteEnabled ? "Close" : "Open", action: toggle)
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderless)
                 .controlSize(.small)
+                .font(AppTypography.meta)
+                .foregroundStyle(isRouteEnabled ? Color.secondary : Color.accentColor)
                 .frame(width: toggleColumnWidth)
                 .help(isRouteEnabled ? "Close this route" : "Open this route")
 
@@ -2944,26 +2971,27 @@ private struct RoutesTableView: View {
             .frame(width: actionColumnWidth, height: 28)
             .padding(.trailing, tableInset)
         }
-        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 58, alignment: .leading)
         .background {
             if isSelected {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.accentColor.opacity(0.13))
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Color.accentColor.opacity(0.14))
             }
         }
+        .contentShape(Rectangle())
     }
 
     private func isExpanded(_ route: LocalProxyRoute, kind: TunnelMode) -> Bool {
         model.selectedSecurityRouteKind == kind && model.selectedSecurityRoute == route
     }
 
-    private func routeLineText(_ value: String, width: CGFloat?, truncationMode: Text.TruncationMode) -> some View {
+    private func routeLineText(_ value: String, width: CGFloat?, truncationMode: Text.TruncationMode, primary: Bool) -> some View {
         tooltippedText(
             value,
             width: width,
             truncationMode: truncationMode,
             font: AppTypography.contentStrong,
-            foregroundStyle: .secondary,
+            foregroundStyle: primary ? .primary : .secondary,
             copyable: false
         )
     }
@@ -3030,19 +3058,19 @@ private struct RouteSecurityInlineView: View {
     @State private var showsSecret = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             Divider()
             selectedRouteSummary
             allowlist
             authHeader
         }
-        .padding(.leading, 38)
-        .padding(.trailing, 38)
-        .padding(.vertical, 12)
+        .padding(.leading, 42)
+        .padding(.trailing, 88)
+        .padding(.vertical, 14)
     }
 
     private var selectedRouteSummary: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Selected route")
                 .font(AppTypography.contentStrong)
                 .foregroundStyle(.primary)
@@ -3056,12 +3084,12 @@ private struct RouteSecurityInlineView: View {
     private func selectablePair(_ label: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Text(label)
-                .font(AppTypography.content)
+                .font(AppTypography.meta)
                 .foregroundStyle(.tertiary)
                 .frame(width: 34, alignment: .leading)
             Text(value)
                 .font(AppTypography.content)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.primary)
                 .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -3077,15 +3105,18 @@ private struct RouteSecurityInlineView: View {
             HStack(spacing: 8) {
                 TextField("203.0.113.10 or 198.51.100.0/24", text: $model.newAllowlistEntry)
                     .textFieldStyle(.roundedBorder)
+                    .font(AppTypography.content)
                     .onSubmit(model.addAllowlistEntry)
                 Button(action: model.addAllowlistEntry) {
                     Image(systemName: "plus")
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .frame(width: 36)
             }
             if model.selectedRouteSecurity.allowlistEntries.isEmpty {
                 Text("Allow all inbound IPs")
-                    .font(AppTypography.content)
+                    .font(AppTypography.meta)
                     .foregroundStyle(.tertiary)
             } else {
                 ForEach(model.selectedRouteSecurity.allowlistEntries, id: \.self) { entry in
@@ -3118,6 +3149,7 @@ private struct RouteSecurityInlineView: View {
                 set: { model.setSelectedAuthHeaderName($0) }
             ))
             .textFieldStyle(.roundedBorder)
+            .font(AppTypography.content)
             .disabled(!model.routeAuthHeaderEnabledDraft)
             .onSubmit(model.saveAuthHeaderSettings)
 
@@ -3128,6 +3160,7 @@ private struct RouteSecurityInlineView: View {
                         set: { model.updateAuthHeaderSecretDraft($0) }
                     ))
                         .textFieldStyle(.roundedBorder)
+                        .font(AppTypography.content)
                         .disabled(!model.routeAuthHeaderEnabledDraft)
                         .onSubmit(model.saveAuthHeaderSettings)
                 } else {
@@ -3136,6 +3169,7 @@ private struct RouteSecurityInlineView: View {
                         set: { model.updateAuthHeaderSecretDraft($0) }
                     ))
                         .textFieldStyle(.roundedBorder)
+                        .font(AppTypography.content)
                         .disabled(!model.routeAuthHeaderEnabledDraft)
                         .onSubmit(model.saveAuthHeaderSettings)
                 }
@@ -3149,6 +3183,7 @@ private struct RouteSecurityInlineView: View {
 
                 Button(model.routeAuthSavedRecently ? "Saved" : "Save", action: model.saveAuthHeaderSettings)
                     .buttonStyle(.borderedProminent)
+                    .font(AppTypography.meta)
                     .tint(model.routeAuthHeaderHasChanges ? .accentColor : .secondary)
                     .disabled(!model.routeAuthHeaderHasChanges)
             }
