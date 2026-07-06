@@ -401,7 +401,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     var allowlistSummary: String {
-        let securedRoutes = (activeQuickRoutes + activeDNSRoutes).filter { route in
+        let securedRoutes = (allQuickRoutes + allDNSRoutes).filter { route in
             guard let security = route.security else { return false }
             return !security.allowlistEntries.isEmpty || security.authHeaderEnabled
         }.count
@@ -424,7 +424,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func saveRouteStatusSnapshot() {
-        let entries = activeQuickRoutes.map { route in
+        let entries = allQuickRoutes.map { route in
             RouteStatusEntry(
                 route: route,
                 kind: .quickURL,
@@ -432,7 +432,7 @@ final class TunnelBarViewModel: ObservableObject {
                 publicURL: quickPublicURLs[route]?.absoluteString,
                 message: quickRouteRuntimeMessage(route)
             )
-        } + activeDNSRoutes.map { route in
+        } + allDNSRoutes.map { route in
             RouteStatusEntry(
                 route: route,
                 kind: .dns,
@@ -973,7 +973,7 @@ final class TunnelBarViewModel: ObservableObject {
         newDNSPathText = ""
         saveSettings()
         if didAdd {
-            refreshDNSTunnelIfNeeded()
+            reconcileDNSTunnelAfterRouteToggle()
         }
         return didAdd
     }
@@ -997,7 +997,12 @@ final class TunnelBarViewModel: ObservableObject {
         newQuickPathText = ""
         saveSettings()
         if didAdd {
-            startQuickRouteIfNeeded(route)
+            do {
+                try openQuickRoute(normalizedRoute(route, wildcardHost: true))
+            } catch {
+                status = .error(error.localizedDescription)
+                appendLog("Random DNS open failed: \(error.localizedDescription)")
+            }
         }
         return didAdd
     }
@@ -1017,9 +1022,47 @@ final class TunnelBarViewModel: ObservableObject {
         settings.dnsRoutes.removeAll { $0 == route }
         saveSettings()
         if settings.dnsRoutes.count != oldCount {
-            refreshDNSTunnelIfNeeded()
+            reconcileDNSTunnelAfterRouteToggle()
             syncSelectedSecurityRoute()
         }
+    }
+
+    func toggleQuickRoute(_ route: LocalProxyRoute) {
+        guard let index = settings.quickRoutes.firstIndex(where: { normalizedRoute($0, wildcardHost: true) == normalizedRoute(route, wildcardHost: true) }) else {
+            return
+        }
+        var updatedRoute = settings.quickRoutes[index]
+        updatedRoute.isOpen.toggle()
+        settings.quickRoutes[index] = updatedRoute
+        saveSettings()
+
+        let normalized = normalizedRoute(updatedRoute, wildcardHost: true)
+        if normalized.isOpen {
+            appendLog("Opening random DNS route \(normalized.targetPath). A new random DNS address will be assigned.")
+            do {
+                try openQuickRoute(normalized)
+            } catch {
+                status = .error(error.localizedDescription)
+                appendLog("Random DNS open failed: \(error.localizedDescription)")
+            }
+        } else {
+            appendLog("Closing random DNS route \(normalized.targetPath)")
+            stopQuickRouteSession(normalized)
+        }
+        saveRouteStatusSnapshot()
+    }
+
+    func toggleDNSRoute(_ route: LocalProxyRoute) {
+        guard let index = settings.dnsRoutes.firstIndex(where: { normalizedRoute($0, wildcardHost: false) == normalizedRoute(route, wildcardHost: false) }) else {
+            return
+        }
+        var updatedRoute = settings.dnsRoutes[index]
+        updatedRoute.isOpen.toggle()
+        settings.dnsRoutes[index] = updatedRoute
+        saveSettings()
+        appendLog("\(updatedRoute.isOpen ? "Opening" : "Closing") DNS route \(updatedRoute.hostname)\(updatedRoute.normalizedTargetPath == "/" ? "" : updatedRoute.normalizedTargetPath)")
+        reconcileDNSTunnelAfterRouteToggle()
+        saveRouteStatusSnapshot()
     }
 
     private func updateSelectedSecurity(_ update: (inout RouteSecurity) -> Void) {
@@ -1063,9 +1106,9 @@ final class TunnelBarViewModel: ObservableObject {
 
         switch kind {
         case .quickURL:
-            selectedSecurityRoute = activeQuickRoutes.first { $0 == selectedRoute }
+            selectedSecurityRoute = allQuickRoutes.first { $0 == selectedRoute }
         case .dns:
-            selectedSecurityRoute = activeDNSRoutes.first { $0 == selectedRoute }
+            selectedSecurityRoute = allDNSRoutes.first { $0 == selectedRoute }
         }
 
         if selectedSecurityRoute == nil {
@@ -1435,16 +1478,15 @@ final class TunnelBarViewModel: ObservableObject {
         }
     }
 
-    private func startQuickRouteIfNeeded(_ route: LocalProxyRoute) {
-        defer { saveRouteStatusSnapshot() }
-        guard status.isStarted else { return }
-        do {
-            try startQuickTunnel(normalizedRoute(route, wildcardHost: true))
-            status = .running
-        } catch {
-            status = .error(error.localizedDescription)
-            appendLog("Quick route start failed: \(error.localizedDescription)")
+    private func openQuickRoute(_ route: LocalProxyRoute) throws {
+        guard route.isOpen else { return }
+        guard hasCloudflared else {
+            throw TunnelStartError(message: "cloudflared was not found")
         }
+        try startQuickTunnel(route)
+        activeTunnelModes.insert(.quickURL)
+        status = .running
+        publicURL = publicURLs.first
     }
 
     private func stopQuickRouteSession(_ route: LocalProxyRoute) {
@@ -1464,22 +1506,32 @@ final class TunnelBarViewModel: ObservableObject {
         }
     }
 
-    private func refreshDNSTunnelIfNeeded() {
+    private func reconcileDNSTunnelAfterRouteToggle() {
         defer { saveRouteStatusSnapshot() }
-        guard status.isStarted else { return }
-        stopDNSTunnelOnly()
-        guard canStartDNS else {
-            if activeTunnelModes.isEmpty {
+        updateAccessPolicy()
+        updateRouteSecurityPolicies()
+        guard !activeDNSRoutes.isEmpty else {
+            stopDNSTunnelOnly()
+            dnsCloudflaredIssue = nil
+            if quickSessions.isEmpty {
                 status = .stopped
             }
             return
         }
+        guard canStartDNS else {
+            dnsCloudflaredIssue = dnsUnavailableReason
+            if quickSessions.isEmpty {
+                status = .error(dnsUnavailableReason ?? "DNS route is not configured")
+            }
+            return
+        }
+        stopDNSTunnelOnly()
         do {
             try startDNSTunnel()
             status = .running
             publicURL = publicURLs.first
         } catch {
-            appendLog("DNS tunnel refresh failed: \(error.localizedDescription)")
+            appendLog("DNS route open failed: \(error.localizedDescription)")
             applyDNSFailure(error.localizedDescription)
         }
     }
@@ -1514,7 +1566,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func updateRouteSecurityPolicies() {
-        routeSecurityPolicies.update(routes: activeQuickRoutes + activeDNSRoutes)
+        routeSecurityPolicies.update(routes: allQuickRoutes + allDNSRoutes)
     }
 
     private func addRecentPort(_ port: Int) {
@@ -1594,12 +1646,22 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     var activeQuickRoutes: [LocalProxyRoute] {
+        allQuickRoutes
+            .filter(\.isOpen)
+    }
+
+    var activeDNSRoutes: [LocalProxyRoute] {
+        allDNSRoutes
+            .filter(\.isOpen)
+    }
+
+    var allQuickRoutes: [LocalProxyRoute] {
         settings.quickRoutes
             .map { normalizedRoute($0, wildcardHost: true) }
             .filter { $0.targetPort > 0 && $0.targetPort <= 65535 }
     }
 
-    var activeDNSRoutes: [LocalProxyRoute] {
+    var allDNSRoutes: [LocalProxyRoute] {
         settings.dnsRoutes
             .map { normalizedRoute($0, wildcardHost: false) }
             .filter { !$0.hostname.isEmpty && $0.targetPort > 0 && $0.targetPort <= 65535 }
@@ -1633,10 +1695,18 @@ final class TunnelBarViewModel: ObservableObject {
         quickPublicURLs[route] == nil && quickSessions.contains(where: { $0.route == route })
     }
 
+    func quickRouteIsOpen(_ route: LocalProxyRoute) -> Bool {
+        quickPublicURLs[normalizedRoute(route, wildcardHost: true)] != nil
+    }
+
+    func dnsRouteIsOpen(_ route: LocalProxyRoute) -> Bool {
+        normalizedRoute(route, wildcardHost: false).isOpen && activeTunnelModes.contains(.dns)
+    }
+
     private func normalizeLists() {
         settings.targetPaths = normalizedPaths(settings.targetPaths, fallback: settings.targetPath)
         settings.targetPath = settings.targetPaths.first ?? "/"
-        settings.quickRoutes = activeQuickRoutes
+        settings.quickRoutes = allQuickRoutes
         if let firstRoute = settings.quickRoutes.first {
             settings.targetPort = firstRoute.targetPort
             settings.targetPath = firstRoute.targetPath
@@ -1644,8 +1714,8 @@ final class TunnelBarViewModel: ObservableObject {
         }
         settings.dnsTargetPaths = normalizedPaths(settings.dnsTargetPaths, fallback: settings.dnsTargetPath)
         settings.dnsTargetPath = settings.dnsTargetPaths.first ?? "/"
-        settings.dnsRoutes = activeDNSRoutes
-        settings.dnsHostnames = activeDNSHostnames
+        settings.dnsRoutes = allDNSRoutes
+        settings.dnsHostnames = Array(NSOrderedSet(array: settings.dnsRoutes.map(\.hostname)).compactMap { $0 as? String })
         settings.dnsHostname = settings.dnsHostnames.first ?? ""
         if let firstRoute = settings.dnsRoutes.first {
             settings.dnsTargetPort = firstRoute.targetPort
@@ -1684,7 +1754,8 @@ final class TunnelBarViewModel: ObservableObject {
             hostname: wildcardHost ? "" : route.hostname.trimmingCharacters(in: .whitespacesAndNewlines),
             targetPort: route.targetPort,
             targetPath: path,
-            security: route.security
+            security: route.security,
+            isOpen: route.isOpen
         )
     }
 
@@ -1834,21 +1905,21 @@ struct NativeMenuContentView: View {
 
     @ViewBuilder
     private var primaryRouteItems: some View {
-        if model.activeQuickRoutes.isEmpty && model.activeDNSRoutes.isEmpty {
+        if model.allQuickRoutes.isEmpty && model.allDNSRoutes.isEmpty {
             Button {
                 openRoutesWindow()
             } label: {
                 Label("Add route...", systemImage: "plus.circle")
             }
         } else {
-            ForEach(model.activeQuickRoutes.prefix(2), id: \.self) { route in
+            ForEach(model.allQuickRoutes.prefix(2), id: \.self) { route in
                 Button {
                     openRouteSecurity(route, kind: .quickURL)
                 } label: {
                     routeMenuLabel(forQuickRoute: route)
                 }
             }
-            ForEach(model.activeDNSRoutes.prefix(2), id: \.self) { route in
+            ForEach(model.allDNSRoutes.prefix(2), id: \.self) { route in
                 Button {
                     openRouteSecurity(route, kind: .dns)
                 } label: {
@@ -1860,14 +1931,14 @@ struct NativeMenuContentView: View {
 
     @ViewBuilder
     private var allRouteItems: some View {
-        ForEach(model.activeQuickRoutes, id: \.self) { route in
+        ForEach(model.allQuickRoutes, id: \.self) { route in
             Button {
                 openRouteSecurity(route, kind: .quickURL)
             } label: {
                 routeMenuLabel(forQuickRoute: route)
             }
         }
-        ForEach(model.activeDNSRoutes, id: \.self) { route in
+        ForEach(model.allDNSRoutes, id: \.self) { route in
             Button {
                 openRouteSecurity(route, kind: .dns)
             } label: {
@@ -1877,11 +1948,11 @@ struct NativeMenuContentView: View {
     }
 
     private var totalRouteCount: Int {
-        model.activeQuickRoutes.count + model.activeDNSRoutes.count
+        model.allQuickRoutes.count + model.allDNSRoutes.count
     }
 
     private var hasMoreRoutes: Bool {
-        model.activeQuickRoutes.count > 2 || model.activeDNSRoutes.count > 2
+        model.allQuickRoutes.count > 2 || model.allDNSRoutes.count > 2
     }
 
     private func dnsRouteFrom(_ route: LocalProxyRoute) -> String {
@@ -1900,7 +1971,7 @@ struct NativeMenuContentView: View {
         Text(routeMenuTitle(
             from: dnsRouteFrom(route),
             to: "127.0.0.1:\(route.targetPort)",
-            status: dnsRouteStatus
+            status: dnsRouteStatus(route)
         ))
     }
 
@@ -1921,16 +1992,22 @@ struct NativeMenuContentView: View {
     }
 
     private func quickRouteStatus(_ route: LocalProxyRoute) -> RouteMenuStatus {
+        guard route.isOpen else {
+            return .stopped
+        }
         if model.quickRouteIsPending(route) {
             return .pending
         }
-        if model.runningModes.contains(.quickURL) && !model.requiresRestart {
+        if model.quickRouteIsOpen(route) && !model.requiresRestart {
             return .opened
         }
         return model.requiresRestart ? .restartRequired : .stopped
     }
 
-    private var dnsRouteStatus: RouteMenuStatus {
+    private func dnsRouteStatus(_ route: LocalProxyRoute) -> RouteMenuStatus {
+        guard route.isOpen else {
+            return .stopped
+        }
         if model.dnsUnavailableReason != nil {
             return model.runningModes.contains(.dns) ? .degraded : .error
         }
@@ -1983,7 +2060,7 @@ private enum RouteMenuStatus {
         case .error:
             return "Error"
         case .stopped:
-            return "Stopped"
+            return "Closed"
         }
     }
 
@@ -2341,42 +2418,9 @@ struct AppWindowView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Spacer()
-            Toggle("Start", isOn: Binding(
-                get: { model.status.isStarted },
-                set: { enabled in
-                    if enabled {
-                        model.start()
-                    } else {
-                        model.stop()
-                    }
-                }
-            ))
-            .toggleStyle(.switch)
-            .controlSize(.large)
-            .disabled(model.status == .starting || (!model.canStart && (model.status.canStartTunnel || model.requiresRestart)))
         }
     }
 
-    private func primaryAction() {
-        if model.requiresRestart {
-            model.restart()
-        } else if model.status.canStartTunnel {
-            model.start()
-        } else {
-            model.stop()
-        }
-    }
-
-    private var primaryActionTitle: String {
-        if model.requiresRestart { return "Restart" }
-        return model.status.canStartTunnel ? "Start" : "Stop"
-    }
-
-    private var primaryActionIcon: String {
-        if model.requiresRestart { return "arrow.clockwise" }
-        return model.status.canStartTunnel ? "play.fill" : "stop.fill"
-    }
 }
 
 struct MenuContentView: View {
@@ -2414,15 +2458,19 @@ struct MenuContentView: View {
     private var routesTable: some View {
         RoutesTableView(
             model: model,
-            quickRoutes: model.activeQuickRoutes,
-            dnsRoutes: model.activeDNSRoutes,
+            quickRoutes: model.allQuickRoutes,
+            dnsRoutes: model.allDNSRoutes,
             runningModes: model.runningModes,
             requiresRestart: model.requiresRestart,
             dnsUnavailableReason: model.dnsUnavailableReason,
             quickRouteFrom: { model.quickRouteFrom($0) },
+            quickRouteIsOpen: { model.quickRouteIsOpen($0) },
             quickRouteIsPending: { model.quickRouteIsPending($0) },
+            dnsRouteIsOpen: { model.dnsRouteIsOpen($0) },
             selectQuickRoute: { model.selectRouteForSecurity($0, kind: .quickURL) },
             selectDNSRoute: { model.selectRouteForSecurity($0, kind: .dns) },
+            toggleQuickRoute: { model.toggleQuickRoute($0) },
+            toggleDNSRoute: { model.toggleDNSRoute($0) },
             removeQuickRoute: { model.removeQuickRoute($0) },
             removeDNSRoute: { model.removeDNSRoute($0) },
             tableHeight: showsTabs ? 120 : nil
@@ -2462,6 +2510,9 @@ struct MenuContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Add Random DNS")
                 .font(AppTypography.sectionTitle)
+            Text("Closing and reopening a random DNS route assigns a new public address.")
+                .font(AppTypography.content)
+                .foregroundStyle(.secondary)
             HStack(spacing: 6) {
                 TextField("8989", text: $model.newQuickPortText)
                     .textFieldStyle(.roundedBorder)
@@ -2547,38 +2598,6 @@ struct MenuContentView: View {
 
     private func digitsOnly(_ value: String) -> String {
         String(value.filter(\.isNumber).prefix(5))
-    }
-
-    private var actionControls: some View {
-        HStack {
-            Button {
-                if model.requiresRestart {
-                    model.restart()
-                } else if model.status.canStartTunnel {
-                    model.start()
-                } else {
-                    model.stop()
-                }
-            } label: {
-                Label(actionTitle, systemImage: actionIcon)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(model.status == .starting || (!model.canStart && (model.status.canStartTunnel || model.requiresRestart)))
-        }
-    }
-
-    private var actionTitle: String {
-        if model.requiresRestart {
-            return "Restart"
-        }
-        return model.status.canStartTunnel ? "Start" : "Stop"
-    }
-
-    private var actionIcon: String {
-        if model.requiresRestart {
-            return "arrow.clockwise"
-        }
-        return model.status.canStartTunnel ? "play.fill" : "stop.fill"
     }
 
     private var allowlistControls: some View {
@@ -2702,19 +2721,6 @@ struct MenuContentView: View {
 
     private var footerControls: some View {
         HStack(spacing: 10) {
-            Button {
-                if model.requiresRestart {
-                    model.restart()
-                } else if model.status.canStartTunnel {
-                    model.start()
-                } else {
-                    model.stop()
-                }
-            } label: {
-                Label(actionTitle, systemImage: actionIcon)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(model.status == .starting || (!model.canStart && (model.status.canStartTunnel || model.requiresRestart)))
             Spacer()
             Button {
                 model.selectedTab = .about
@@ -2764,15 +2770,20 @@ private struct RoutesTableView: View {
     let requiresRestart: Bool
     let dnsUnavailableReason: String?
     let quickRouteFrom: (LocalProxyRoute) -> String
+    let quickRouteIsOpen: (LocalProxyRoute) -> Bool
     let quickRouteIsPending: (LocalProxyRoute) -> Bool
+    let dnsRouteIsOpen: (LocalProxyRoute) -> Bool
     let selectQuickRoute: (LocalProxyRoute) -> Void
     let selectDNSRoute: (LocalProxyRoute) -> Void
+    let toggleQuickRoute: (LocalProxyRoute) -> Void
+    let toggleDNSRoute: (LocalProxyRoute) -> Void
     let removeQuickRoute: (LocalProxyRoute) -> Void
     let removeDNSRoute: (LocalProxyRoute) -> Void
     let tableHeight: CGFloat?
 
     private let statusColumnWidth: CGFloat = 16
     private let targetColumnWidth: CGFloat = 148
+    private let toggleColumnWidth: CGFloat = 74
     private let actionColumnWidth: CGFloat = 28
     private let columnSpacing: CGFloat = 12
     private let tableInset: CGFloat = 10
@@ -2790,11 +2801,13 @@ private struct RoutesTableView: View {
                                 routeRow(
                                     from: quickRouteFrom(route),
                                     port: route.targetPort,
-                                    isActive: runningModes.contains(.quickURL),
+                                    isRouteEnabled: route.isOpen,
+                                    isActive: quickRouteIsOpen(route),
                                     isPending: quickRouteIsPending(route),
-                                    statusText: nil,
+                                    statusText: route.isOpen ? nil : "Closed. Reopen assigns a new random DNS address.",
                                     isSelected: isExpanded(route, kind: .quickURL),
                                     select: { selectQuickRoute(route) },
+                                    toggle: { toggleQuickRoute(route) },
                                     remove: { removeQuickRoute(route) }
                                 )
                                 if isExpanded(route, kind: .quickURL) {
@@ -2808,11 +2821,13 @@ private struct RoutesTableView: View {
                                 routeRow(
                                     from: "\(route.hostname)\(displayPath(route.targetPath))",
                                     port: route.targetPort,
-                                    isActive: runningModes.contains(.dns),
-                                    isPending: dnsUnavailableReason != nil,
-                                    statusText: dnsUnavailableReason,
+                                    isRouteEnabled: route.isOpen,
+                                    isActive: dnsRouteIsOpen(route),
+                                    isPending: route.isOpen && dnsUnavailableReason != nil,
+                                    statusText: route.isOpen ? dnsUnavailableReason : "Closed",
                                     isSelected: isExpanded(route, kind: .dns),
                                     select: { selectDNSRoute(route) },
+                                    toggle: { toggleDNSRoute(route) },
                                     remove: { removeDNSRoute(route) }
                                 )
                                 if isExpanded(route, kind: .dns) {
@@ -2865,6 +2880,8 @@ private struct RoutesTableView: View {
                 .foregroundStyle(.tertiary)
                 .frame(width: targetColumnWidth, alignment: .leading)
             Text("")
+                .frame(width: toggleColumnWidth)
+            Text("")
                 .frame(width: actionColumnWidth)
         }
         .padding(.horizontal, tableInset)
@@ -2873,11 +2890,13 @@ private struct RoutesTableView: View {
     private func routeRow(
         from: String,
         port: Int,
+        isRouteEnabled: Bool,
         isActive: Bool,
         isPending: Bool,
         statusText: String?,
         isSelected: Bool,
         select: @escaping () -> Void,
+        toggle: @escaping () -> Void,
         remove: @escaping () -> Void
     ) -> some View {
         let target = "127.0.0.1:\(String(port))"
@@ -2911,6 +2930,12 @@ private struct RoutesTableView: View {
             }
             .buttonStyle(.plain)
 
+            Button(isRouteEnabled ? "Close" : "Open", action: toggle)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .frame(width: toggleColumnWidth)
+                .help(isRouteEnabled ? "Close this route" : "Open this route")
+
             Button(action: remove) {
                 Image(systemName: "minus.circle")
                     .font(AppTypography.content)
@@ -2920,8 +2945,6 @@ private struct RoutesTableView: View {
             .padding(.trailing, tableInset)
         }
         .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: select)
         .background {
             if isSelected {
                 RoundedRectangle(cornerRadius: 8)

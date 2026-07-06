@@ -257,12 +257,31 @@ public struct LocalProxyRoute: Codable, Equatable, Hashable, Sendable {
     public var targetPort: Int
     public var targetPath: String
     public var security: RouteSecurity?
+    public var isOpen: Bool
 
-    public init(hostname: String, targetPort: Int, targetPath: String, security: RouteSecurity? = nil) {
+    enum CodingKeys: String, CodingKey {
+        case hostname
+        case targetPort
+        case targetPath
+        case security
+        case isOpen
+    }
+
+    public init(hostname: String, targetPort: Int, targetPath: String, security: RouteSecurity? = nil, isOpen: Bool = true) {
         self.hostname = hostname
         self.targetPort = targetPort
         self.targetPath = targetPath
         self.security = security
+        self.isOpen = isOpen
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.hostname = try container.decode(String.self, forKey: .hostname)
+        self.targetPort = try container.decode(Int.self, forKey: .targetPort)
+        self.targetPath = try container.decode(String.self, forKey: .targetPath)
+        self.security = try container.decodeIfPresent(RouteSecurity.self, forKey: .security)
+        self.isOpen = try container.decodeIfPresent(Bool.self, forKey: .isOpen) ?? true
     }
 
     public var normalizedTargetPath: String {
