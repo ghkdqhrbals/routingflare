@@ -57,4 +57,13 @@ final class TunnelCommandTests: XCTestCase {
 
         XCTAssertEqual(TunnelURLParser.parsePublicURL(from: output), URL(string: "https://example-widget.trycloudflare.com"))
     }
+
+    func testDetectsRegisteredTunnelConnectionOutput() {
+        let output = """
+        2026-07-06T09:28:13Z INF Registered tunnel connection connIndex=1 connection=bb1577e2-a492-46ab-82ef-34a567834fd0 event=0 ip=198.41.192.37 location=icn06 protocol=quic
+        """
+
+        XCTAssertTrue(TunnelURLParser.outputShowsRegisteredConnection(output))
+        XCTAssertFalse(TunnelURLParser.outputShowsRegisteredConnection("2026-07-06T09:28:13Z INF Retrying connection in up to 1m4s"))
+    }
 }

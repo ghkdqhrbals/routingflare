@@ -62,4 +62,8 @@ public enum TunnelURLParser {
         }
         return URL(string: String(output[urlRange]))
     }
+
+    public static func outputShowsRegisteredConnection(_ output: String) -> Bool {
+        output.contains("Registered tunnel connection")
+    }
 }

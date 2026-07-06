@@ -1202,7 +1202,8 @@ final class TunnelBarViewModel: ObservableObject {
 
     private func handleTunnelOutput(_ output: String) {
         defer { saveRouteStatusSnapshot() }
-        let issue = cloudflaredIssue(from: output, previousLog: logs.last)
+        let recoveredConnection = TunnelURLParser.outputShowsRegisteredConnection(output)
+        let issue = recoveredConnection ? nil : cloudflaredIssue(from: output, previousLog: logs.last)
         appendLog(output)
         if let issue {
             dnsCloudflaredIssue = issue
@@ -1215,6 +1216,11 @@ final class TunnelBarViewModel: ObservableObject {
             publicURL = PublicURLBuilder.build(baseURL: parsedURL, targetPath: activeTargetPaths.first ?? "/")
             activeTunnelModes.insert(.dns)
             status = .running
+        } else if recoveredConnection {
+            dnsCloudflaredIssue = nil
+            activeTunnelModes.insert(.dns)
+            status = .running
+            publicURL = publicURLs.first
         } else if status == .starting {
             activeTunnelModes.insert(.dns)
             status = .running
@@ -1223,6 +1229,7 @@ final class TunnelBarViewModel: ObservableObject {
 
     private func handleQuickTunnelOutput(_ output: String, route: LocalProxyRoute) {
         defer { saveRouteStatusSnapshot() }
+        let recoveredConnection = TunnelURLParser.outputShowsRegisteredConnection(output)
         appendLog(output)
         if let parsedURL = TunnelURLParser.parsePublicURL(from: output),
            let routedURL = PublicURLBuilder.build(baseURL: parsedURL, targetPath: route.targetPath) {
@@ -1230,6 +1237,11 @@ final class TunnelBarViewModel: ObservableObject {
             publicURL = quickPublicURLs.values.first
             activeTunnelModes.insert(.quickURL)
             status = .running
+        } else if recoveredConnection {
+            activeTunnelModes.insert(.quickURL)
+            if case .error = status {
+                status = .running
+            }
         }
     }
 
