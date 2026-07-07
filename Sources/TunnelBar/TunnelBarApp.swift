@@ -115,8 +115,6 @@ private enum AppTypography {
 
 enum AppTab: String, CaseIterable, Identifiable {
     case routes
-    case quickURL
-    case dns
     case options
     case logs
     case about
@@ -127,10 +125,6 @@ enum AppTab: String, CaseIterable, Identifiable {
         switch self {
         case .routes:
             return "Routing"
-        case .quickURL:
-            return "Random DNS"
-        case .dns:
-            return "DNS"
         case .options:
             return "Options"
         case .logs:
@@ -141,24 +135,13 @@ enum AppTab: String, CaseIterable, Identifiable {
     }
 
     var tunnelMode: TunnelMode? {
-        switch self {
-        case .quickURL:
-            return .quickURL
-        case .dns:
-            return .dns
-        case .routes, .options, .logs, .about:
-            return nil
-        }
+        nil
     }
 
     var systemImage: String {
         switch self {
         case .routes:
             return "list.bullet.rectangle"
-        case .quickURL:
-            return "globe"
-        case .dns:
-            return "network"
         case .options:
             return "slider.horizontal.3"
         case .logs:
@@ -2309,6 +2292,8 @@ private struct AboutPanelView: View {
 
 struct AppWindowView: View {
     @ObservedObject var model: TunnelBarViewModel
+    @State private var isShowingAddRoutePopover = false
+    @State private var addRouteMode: TunnelMode = .quickURL
 
     var body: some View {
         HSplitView {
@@ -2402,13 +2387,10 @@ struct AppWindowView: View {
                 .fill(model.status.isStarted ? .green : .secondary)
                 .frame(width: 9, height: 9)
             VStack(alignment: .leading, spacing: 1) {
-                Text("routingflare")
+                Text("Routingflare")
                     .font(AppTypography.sectionTitle)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                Text(model.status.label)
-                    .foregroundStyle(.secondary)
-                    .font(AppTypography.meta)
             }
             Spacer()
         }
@@ -2421,6 +2403,24 @@ struct AppWindowView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
                 .frame(maxWidth: .infinity, alignment: .leading)
+            if model.selectedTab == .routes {
+                Button {
+                    isShowingAddRoutePopover.toggle()
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .sheet(isPresented: $isShowingAddRoutePopover) {
+                    AddRoutePopoverView(
+                        model: model,
+                        mode: $addRouteMode,
+                        isPresented: $isShowingAddRoutePopover
+                    )
+                }
+            }
         }
     }
 
@@ -2484,11 +2484,6 @@ struct MenuContentView: View {
     private var tabContent: some View {
         if model.selectedTab == .routes {
             routesTable
-        } else if model.selectedTab == .quickURL {
-            quickRouteForm
-        } else if model.selectedTab == .dns {
-            dnsControls
-            dnsRouteForm
         } else if model.selectedTab == .options {
             optionsControls
         } else if model.selectedTab == .logs {
@@ -2782,6 +2777,129 @@ struct MenuContentView: View {
     }
 }
 
+private struct AddRoutePopoverView: View {
+    @ObservedObject var model: TunnelBarViewModel
+    @Binding var mode: TunnelMode
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Picker("", selection: $mode) {
+                Text("Random DNS").tag(TunnelMode.quickURL)
+                Text("DNS").tag(TunnelMode.dns)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            Divider()
+
+            if mode == .quickURL {
+                randomDNSForm
+            } else {
+                dnsForm
+            }
+        }
+        .padding(16)
+        .frame(width: 620)
+    }
+
+    private var randomDNSForm: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            sectionHeader(
+                "Random DNS",
+                note: "Creates a temporary trycloudflare.com address. Reopening a closed route creates a new address."
+            )
+            HStack(spacing: 10) {
+                portField(text: $model.newQuickPortText)
+                TextField("/console", text: $model.newQuickPathText)
+                    .textFieldStyle(.roundedBorder)
+                    .font(AppTypography.content)
+                    .onSubmit(addRandomDNS)
+                formActions(addAction: addRandomDNS, addDisabled: false)
+            }
+        }
+    }
+
+    private var dnsForm: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionHeader("Tunnel", note: nil)
+                TextField("Tunnel ID, e.g. 24c83c3f-...", text: $model.settings.dnsTunnelID)
+                    .textFieldStyle(.roundedBorder)
+                    .font(AppTypography.content)
+                    .onSubmit(model.saveSettings)
+                TextField("Credentials file, e.g. ~/.cloudflared/<id>.json", text: $model.settings.dnsCredentialsFile)
+                    .textFieldStyle(.roundedBorder)
+                    .font(AppTypography.content)
+                    .onSubmit(model.saveSettings)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                sectionHeader("DNS route", note: nil)
+                HStack(spacing: 10) {
+                    TextField("dev.example.com", text: $model.newDNSHostname)
+                        .textFieldStyle(.roundedBorder)
+                        .font(AppTypography.content)
+                    portField(text: $model.newDNSPortText)
+                    TextField("/console", text: $model.newDNSPathText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(AppTypography.content)
+                    formActions(addAction: addDNS, addDisabled: !model.canAddDNSRoute)
+                }
+            }
+        }
+    }
+
+    private func sectionHeader(_ title: String, note: String?) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(AppTypography.sectionTitle)
+            if let note {
+                Text(note)
+                    .font(AppTypography.meta)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func portField(text: Binding<String>) -> some View {
+        TextField("8989", text: text)
+            .textFieldStyle(.roundedBorder)
+            .font(AppTypography.content)
+            .frame(width: 96)
+            .onChange(of: text.wrappedValue) { _, value in
+                text.wrappedValue = String(value.filter(\.isNumber).prefix(5))
+            }
+    }
+
+    private func formActions(addAction: @escaping () -> Void, addDisabled: Bool) -> some View {
+        HStack(spacing: 8) {
+            Button("Cancel") {
+                isPresented = false
+            }
+            .buttonStyle(.bordered)
+            Button("Add", action: addAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(addDisabled)
+        }
+    }
+
+    private func addRandomDNS() {
+        if model.addQuickRoute() {
+            model.selectedTab = .routes
+            isPresented = false
+        }
+    }
+
+    private func addDNS() {
+        if model.addDNSRoute() {
+            model.selectedTab = .routes
+            isPresented = false
+        }
+    }
+}
+
 private struct RoutesTableView: View {
     @State private var copiedValue: String?
 
@@ -2805,7 +2923,7 @@ private struct RoutesTableView: View {
 
     private let statusColumnWidth: CGFloat = 16
     private let targetColumnWidth: CGFloat = 178
-    private let toggleColumnWidth: CGFloat = 68
+    private let toggleColumnWidth: CGFloat = 48
     private let actionColumnWidth: CGFloat = 30
     private let columnSpacing: CGFloat = 14
     private let tableInset: CGFloat = 12
@@ -2955,11 +3073,13 @@ private struct RoutesTableView: View {
             }
             .buttonStyle(.plain)
 
-            Button(isRouteEnabled ? "Close" : "Open", action: toggle)
-                .buttonStyle(.borderless)
-                .controlSize(.small)
-                .font(AppTypography.meta)
-                .foregroundStyle(isRouteEnabled ? Color.secondary : Color.accentColor)
+            Toggle("", isOn: Binding(
+                get: { isRouteEnabled },
+                set: { _ in toggle() }
+            ))
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.mini)
                 .frame(width: toggleColumnWidth)
                 .help(isRouteEnabled ? "Close this route" : "Open this route")
 
