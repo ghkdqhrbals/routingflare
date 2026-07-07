@@ -2307,18 +2307,15 @@ struct AppWindowView: View {
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            windowHeader
-                .padding(.horizontal, 18)
-                .padding(.top, 54)
-
+        VStack(alignment: .leading, spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
                     ForEach(AppTab.allCases) { tab in
                         sidebarRow(tab)
                     }
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 10)
+                .padding(.top, 34)
                 .padding(.bottom, 18)
             }
         }
@@ -2328,8 +2325,6 @@ struct AppWindowView: View {
     private var detail: some View {
         VStack(alignment: .leading, spacing: 18) {
             detailHeader
-
-            Divider()
 
             MenuContentView(
                 model: model,
@@ -2341,7 +2336,7 @@ struct AppWindowView: View {
             .padding(0)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .padding(.top, 54)
+        .padding(.top, 34)
         .padding(.horizontal, 34)
         .padding(.bottom, 28)
     }
@@ -2366,34 +2361,19 @@ struct AppWindowView: View {
                 }
                 Spacer()
             }
-            .frame(maxWidth: .infinity, minHeight: 42, alignment: .leading)
-            .foregroundStyle(model.selectedTab == tab ? .white : .primary)
+            .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
+            .foregroundStyle(.primary)
             .padding(.horizontal, 14)
-            .padding(.vertical, 4)
+            .padding(.vertical, 3)
             .contentShape(Rectangle())
             .background {
                 if model.selectedTab == tab {
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.accentColor)
+                        .fill(Color.accentColor.opacity(0.18))
                 }
             }
         }
         .buttonStyle(.plain)
-    }
-
-    private var windowHeader: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(model.status.isStarted ? .green : .secondary)
-                .frame(width: 9, height: 9)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Routingflare")
-                    .font(AppTypography.sectionTitle)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-            Spacer()
-        }
     }
 
     private var detailHeader: some View {
@@ -2764,8 +2744,7 @@ struct MenuContentView: View {
     }
 
     private var logsView: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            pageSectionHeader("Logs", note: nil)
+        VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 Text(model.logs.suffix(20).joined(separator: "\n"))
                     .font(.system(size: 12, design: .monospaced))
@@ -2790,8 +2769,6 @@ private struct AddRoutePopoverView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-
-            Divider()
 
             if mode == .quickURL {
                 randomDNSForm
@@ -3008,26 +2985,24 @@ private struct RoutesTableView: View {
     }
 
     private var tableHeader: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: columnSpacing) {
-                Text("")
-                    .frame(width: statusColumnWidth)
-                Text("From")
-                    .font(AppTypography.meta)
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text("To")
-                    .font(AppTypography.meta)
-                    .foregroundStyle(.tertiary)
-                    .frame(width: targetColumnWidth, alignment: .leading)
-                Text("")
-                    .frame(width: toggleColumnWidth)
-                Text("")
-                    .frame(width: actionColumnWidth)
-            }
-            .padding(.horizontal, tableInset)
-            Divider()
+        HStack(spacing: columnSpacing) {
+            Text("")
+                .frame(width: statusColumnWidth)
+            Text("From")
+                .font(AppTypography.meta)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("To")
+                .font(AppTypography.meta)
+                .foregroundStyle(.tertiary)
+                .frame(width: targetColumnWidth, alignment: .leading)
+            Text("")
+                .frame(width: toggleColumnWidth)
+            Text("")
+                .frame(width: actionColumnWidth)
         }
+        .padding(.horizontal, tableInset)
+        .padding(.bottom, 2)
     }
 
     private func routeRow(
@@ -3179,7 +3154,6 @@ private struct RouteSecurityInlineView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Divider()
             selectedRouteSummary
             allowlist
             authHeader
