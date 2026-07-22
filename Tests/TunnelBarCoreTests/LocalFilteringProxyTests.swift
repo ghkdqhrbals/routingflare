@@ -181,6 +181,75 @@ final class LocalFilteringProxyTests: XCTestCase {
         XCTAssertNil(filtered["proxy-authorization"])
     }
 
+    func testRequestHeaderFilterRemovesHopByHopHeaders() {
+        let headers = [
+            "Host": "lowfidev.cloud",
+            "Content-Type": "application/json",
+            "Content-Length": "128",
+            "Connection": "Transfer-Encoding, X-Origin-Hop",
+            "X-Origin-Hop": "remove-me",
+            "Transfer-Encoding": "Identity",
+            "Keep-Alive": "timeout=5",
+            "TE": "trailers",
+            "Trailer": "Expires",
+            "Upgrade": "websocket",
+            "X-App": "ok"
+        ]
+
+        let filtered = Dictionary(
+            uniqueKeysWithValues: HTTPProxyHeaderFilter.requestHeaders(from: headers)
+                .map { ($0.key.lowercased(), $0.value) }
+        )
+
+        XCTAssertEqual(filtered["content-type"], "application/json")
+        XCTAssertEqual(filtered["x-app"], "ok")
+        XCTAssertNil(filtered["host"])
+        XCTAssertNil(filtered["content-length"])
+        XCTAssertNil(filtered["connection"])
+        XCTAssertNil(filtered["x-origin-hop"])
+        XCTAssertNil(filtered["transfer-encoding"])
+        XCTAssertNil(filtered["keep-alive"])
+        XCTAssertNil(filtered["te"])
+        XCTAssertNil(filtered["trailer"])
+        XCTAssertNil(filtered["upgrade"])
+    }
+
+    func testProxyDoesNotForwardIdentityTransferEncodingToOrigin() throws {
+        let capturedRequest = LockedValue("")
+        let requestCaptured = DispatchSemaphore(value: 0)
+        let server = try TestHTTPServer(body: "ok") { requestText in
+            capturedRequest.set(requestText)
+            requestCaptured.signal()
+        }
+        defer { server.stop() }
+
+        let route = LocalProxyRoute(hostname: "lowfidev.cloud", targetPort: server.port, targetPath: "/")
+        let proxy = LocalFilteringProxy(
+            routes: [route],
+            fallbackTargetPort: server.port,
+            accessPolicy: MutableProxyAccessPolicy(allowlistEntries: []),
+            routeSecurityPolicies: MutableRouteSecurityPolicies(routes: [route]),
+            logHandler: { _ in }
+        )
+        let proxyPort = try proxy.start()
+        defer { proxy.stop() }
+
+        let request = "GET / HTTP/1.1\r\n" +
+            "Host: lowfidev.cloud\r\n" +
+            "Connection: Transfer-Encoding, X-Origin-Hop\r\n" +
+            "Transfer-Encoding: Identity\r\n" +
+            "X-Origin-Hop: remove-me\r\n" +
+            "X-App: ok\r\n" +
+            "\r\n"
+        try sendRawHTTPRequest(request, port: proxyPort)
+
+        XCTAssertEqual(requestCaptured.wait(timeout: .now() + 2), .success)
+        let originRequest = capturedRequest.get()
+        XCTAssertTrue(originRequest.contains("X-App: ok"))
+        XCTAssertFalse(originRequest.localizedCaseInsensitiveContains("Transfer-Encoding:"))
+        XCTAssertFalse(originRequest.localizedCaseInsensitiveContains("X-Origin-Hop:"))
+    }
+
     private func request(
         proxyPort: Int,
         host: String,
@@ -197,6 +266,37 @@ final class LocalFilteringProxyTests: XCTestCase {
         let statusCode = try XCTUnwrap((response as? HTTPURLResponse)?.statusCode)
         return (statusCode, String(decoding: data, as: UTF8.self))
     }
+
+    private func sendRawHTTPRequest(_ request: String, port: Int) throws {
+        let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: UInt16(port))!, using: .tcp)
+        let queue = DispatchQueue(label: "routingflare.tests.raw-client")
+        let ready = DispatchSemaphore(value: 0)
+        let sent = DispatchSemaphore(value: 0)
+        let received = DispatchSemaphore(value: 0)
+        let sendError = LockedValue<Error?>(nil)
+
+        connection.stateUpdateHandler = { state in
+            if case .ready = state {
+                ready.signal()
+            }
+        }
+        connection.start(queue: queue)
+        XCTAssertEqual(ready.wait(timeout: .now() + 2), .success)
+
+        connection.send(content: Data(request.utf8), completion: .contentProcessed { error in
+            sendError.set(error)
+            sent.signal()
+        })
+        XCTAssertEqual(sent.wait(timeout: .now() + 2), .success)
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { _, _, _, _ in
+            received.signal()
+        }
+        XCTAssertEqual(received.wait(timeout: .now() + 2), .success)
+        connection.cancel()
+        if let sendError = sendError.get() {
+            throw sendError
+        }
+    }
 }
 
 private final class TestHTTPServer {
@@ -205,9 +305,11 @@ private final class TestHTTPServer {
     private let listener: NWListener
     private let queue = DispatchQueue(label: "routingflare.tests.http-server")
     private let body: String
+    private let onRequest: @Sendable (String) -> Void
 
-    init(body: String) throws {
+    init(body: String, onRequest: @escaping @Sendable (String) -> Void = { _ in }) throws {
         self.body = body
+        self.onRequest = onRequest
         let parameters = NWParameters.tcp
         if let loopback = IPv4Address("127.0.0.1") {
             parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(loopback), port: .any)
@@ -215,9 +317,12 @@ private final class TestHTTPServer {
         listener = try NWListener(using: parameters, on: .any)
 
         let ready = DispatchSemaphore(value: 0)
-        listener.newConnectionHandler = { [body] connection in
+        listener.newConnectionHandler = { [body, onRequest] connection in
             connection.start(queue: DispatchQueue(label: "routingflare.tests.http-server.connection"))
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { _, _, _, _ in
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { data, _, _, _ in
+                if let data, let requestText = String(data: data, encoding: .utf8) {
+                    onRequest(requestText)
+                }
                 let responseBody = Data(body.utf8)
                 var response = "HTTP/1.1 200 OK\r\n"
                 response += "Content-Length: \(responseBody.count)\r\n"
@@ -242,5 +347,26 @@ private final class TestHTTPServer {
 
     func stop() {
         listener.cancel()
+    }
+}
+
+private final class LockedValue<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: T
+
+    init(_ value: T) {
+        self.value = value
+    }
+
+    func get() -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func set(_ value: T) {
+        lock.lock()
+        self.value = value
+        lock.unlock()
     }
 }

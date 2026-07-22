@@ -149,7 +149,7 @@ public final class LocalFilteringProxy {
 
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = request.method
-        for (key, value) in request.headers where key.caseInsensitiveCompare("host") != .orderedSame {
+        for (key, value) in HTTPProxyHeaderFilter.requestHeaders(from: request.headers) {
             urlRequest.setValue(value, forHTTPHeaderField: key)
         }
         urlRequest.httpBody = request.body.isEmpty ? nil : request.body
@@ -159,7 +159,7 @@ public final class LocalFilteringProxy {
                 let (data, response) = try await URLSession.shared.data(for: urlRequest)
                 let httpResponse = response as? HTTPURLResponse
                 let statusCode = httpResponse?.statusCode ?? 200
-                let headerFields = httpResponse?.allHeaderFields as? [String: String] ?? [:]
+                let headerFields = httpResponse?.allHeaderFields ?? [:]
                 self.send(status: statusCode, headers: headerFields, bodyData: data, to: connection)
                 self.logHandler("Allowed request from \(sourceIP ?? "unknown") to :\(targetRoute.targetPort)\(request.path)")
             } catch {
@@ -187,7 +187,7 @@ public final class LocalFilteringProxy {
         send(status: status, headers: [:], bodyData: Data(body.utf8), to: connection)
     }
 
-    private func send(status: Int, headers: [String: String], bodyData: Data, to connection: NWConnection) {
+    private func send(status: Int, headers: [AnyHashable: Any], bodyData: Data, to connection: NWConnection) {
         var response = "HTTP/1.1 \(status) \(reasonPhrase(for: status))\r\n"
         response += "Content-Length: \(bodyData.count)\r\n"
         response += "Connection: close\r\n"
@@ -222,7 +222,8 @@ public final class LocalFilteringProxy {
 extension LocalFilteringProxy: @unchecked Sendable {}
 
 enum HTTPProxyHeaderFilter {
-    private static let excludedResponseHeaders: Set<String> = [
+    private static let excludedHeaders: Set<String> = [
+        "host",
         "connection",
         "content-length",
         "transfer-encoding",
@@ -234,7 +235,24 @@ enum HTTPProxyHeaderFilter {
         "upgrade"
     ]
 
+    static func requestHeaders(from headers: [String: String]) -> [(key: String, value: String)] {
+        filteredHeaders(from: headers.map { ($0.key, $0.value) })
+    }
+
+    static func responseHeaders(from headers: [AnyHashable: Any]) -> [(key: String, value: String)] {
+        filteredHeaders(from: headers.compactMap { key, value in
+            guard let headerName = key as? String else {
+                return nil
+            }
+            return (headerName, String(describing: value))
+        })
+    }
+
     static func responseHeaders(from headers: [String: String]) -> [(key: String, value: String)] {
+        filteredHeaders(from: headers.map { ($0.key, $0.value) })
+    }
+
+    private static func filteredHeaders(from headers: [(key: String, value: String)]) -> [(key: String, value: String)] {
         let connectionHeaderTokens = headers.flatMap { key, value -> [String] in
             guard key.caseInsensitiveCompare("connection") == .orderedSame else {
                 return []
@@ -244,7 +262,7 @@ enum HTTPProxyHeaderFilter {
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
                 .filter { !$0.isEmpty }
         }
-        let excludedHeaders = excludedResponseHeaders.union(connectionHeaderTokens)
+        let excludedHeaders = Self.excludedHeaders.union(connectionHeaderTokens)
 
         return headers.filter { key, _ in
             !excludedHeaders.contains(key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
