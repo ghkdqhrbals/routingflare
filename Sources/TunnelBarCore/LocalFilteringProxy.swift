@@ -20,6 +20,7 @@ public final class LocalFilteringProxy {
     private let routes: [LocalProxyRoute]
     private let accessPolicy: MutableProxyAccessPolicy
     private let routeSecurityPolicies: MutableRouteSecurityPolicies
+    private let forwardingSession: URLSession
     private let queue = DispatchQueue(label: "TunnelBar.LocalFilteringProxy")
     private let logHandler: @Sendable (String) -> Void
     private var listener: NWListener?
@@ -36,6 +37,7 @@ public final class LocalFilteringProxy {
         self.routes = []
         self.accessPolicy = accessPolicy
         self.routeSecurityPolicies = routeSecurityPolicies
+        self.forwardingSession = Self.makeForwardingSession()
         self.logHandler = logHandler
     }
 
@@ -50,11 +52,26 @@ public final class LocalFilteringProxy {
         self.routes = routes
         self.accessPolicy = accessPolicy
         self.routeSecurityPolicies = routeSecurityPolicies
+        self.forwardingSession = Self.makeForwardingSession()
         self.logHandler = logHandler
     }
 
     deinit {
+        forwardingSession.invalidateAndCancel()
         stop()
+    }
+
+    private static func makeForwardingSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.httpShouldSetCookies = false
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.urlCache = nil
+        return URLSession(
+            configuration: configuration,
+            delegate: RedirectPreservingSessionDelegate(),
+            delegateQueue: nil
+        )
     }
 
     public func start() throws -> Int {
@@ -156,7 +173,7 @@ public final class LocalFilteringProxy {
 
         Task {
             do {
-                let (data, response) = try await URLSession.shared.data(for: urlRequest)
+                let (data, response) = try await forwardingSession.data(for: urlRequest)
                 let httpResponse = response as? HTTPURLResponse
                 let statusCode = httpResponse?.statusCode ?? 200
                 let headerFields = httpResponse?.allHeaderFields ?? [:]
@@ -220,6 +237,18 @@ public final class LocalFilteringProxy {
 }
 
 extension LocalFilteringProxy: @unchecked Sendable {}
+
+private final class RedirectPreservingSessionDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
 
 enum HTTPProxyHeaderFilter {
     private static let excludedHeaders: Set<String> = [

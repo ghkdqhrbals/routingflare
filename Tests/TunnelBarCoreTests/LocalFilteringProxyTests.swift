@@ -250,6 +250,115 @@ final class LocalFilteringProxyTests: XCTestCase {
         XCTAssertFalse(originRequest.localizedCaseInsensitiveContains("X-Origin-Hop:"))
     }
 
+    func testProxyReturnsOriginRedirectAndSetCookieToClient() throws {
+        let server = try TestHTTPServer(
+            statusCode: 302,
+            headers: [
+                "Location": "/login",
+                "Set-Cookie": "grafana_session=browser-session; Path=/; HttpOnly"
+            ],
+            body: ""
+        )
+        defer { server.stop() }
+
+        let route = LocalProxyRoute(hostname: "grafana.example.com", targetPort: server.port, targetPath: "/")
+        let proxy = LocalFilteringProxy(
+            routes: [route],
+            fallbackTargetPort: server.port,
+            accessPolicy: MutableProxyAccessPolicy(allowlistEntries: []),
+            routeSecurityPolicies: MutableRouteSecurityPolicies(routes: [route]),
+            logHandler: { _ in }
+        )
+        let proxyPort = try proxy.start()
+        defer { proxy.stop() }
+
+        let response = try sendRawHTTPRequest(
+            "GET / HTTP/1.1\r\n" +
+                "Host: grafana.example.com\r\n" +
+                "Connection: close\r\n" +
+                "\r\n",
+            port: proxyPort
+        )
+
+        XCTAssertTrue(response.hasPrefix("HTTP/1.1 302"))
+        XCTAssertTrue(response.localizedCaseInsensitiveContains("Location: /login"))
+        XCTAssertTrue(response.localizedCaseInsensitiveContains("Set-Cookie: grafana_session=browser-session"))
+    }
+
+    func testProxyDoesNotStoreOriginCookiesBetweenClients() throws {
+        let capturedRequests = LockedValue<[String]>([])
+        let requestCaptured = DispatchSemaphore(value: 0)
+        let server = try TestHTTPServer(
+            headers: ["Set-Cookie": "grafana_session=origin-session; Path=/; HttpOnly"],
+            body: "ok"
+        ) { requestText in
+            capturedRequests.mutate { $0.append(requestText) }
+            requestCaptured.signal()
+        }
+        defer { server.stop() }
+
+        let route = LocalProxyRoute(hostname: "grafana.example.com", targetPort: server.port, targetPath: "/")
+        let proxy = LocalFilteringProxy(
+            routes: [route],
+            fallbackTargetPort: server.port,
+            accessPolicy: MutableProxyAccessPolicy(allowlistEntries: []),
+            routeSecurityPolicies: MutableRouteSecurityPolicies(routes: [route]),
+            logHandler: { _ in }
+        )
+        let proxyPort = try proxy.start()
+        defer { proxy.stop() }
+
+        _ = try sendRawHTTPRequest(
+            "GET /first HTTP/1.1\r\nHost: grafana.example.com\r\nConnection: close\r\n\r\n",
+            port: proxyPort
+        )
+        _ = try sendRawHTTPRequest(
+            "GET /second HTTP/1.1\r\nHost: grafana.example.com\r\nConnection: close\r\n\r\n",
+            port: proxyPort
+        )
+
+        XCTAssertEqual(requestCaptured.wait(timeout: .now() + 2), .success)
+        XCTAssertEqual(requestCaptured.wait(timeout: .now() + 2), .success)
+        let requests = capturedRequests.get()
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertFalse(requests[1].localizedCaseInsensitiveContains("Cookie:"))
+    }
+
+    func testProxyForwardsBrowserCookieToOrigin() throws {
+        let capturedRequest = LockedValue("")
+        let requestCaptured = DispatchSemaphore(value: 0)
+        let server = try TestHTTPServer(body: "ok") { requestText in
+            capturedRequest.set(requestText)
+            requestCaptured.signal()
+        }
+        defer { server.stop() }
+
+        let route = LocalProxyRoute(hostname: "grafana.example.com", targetPort: server.port, targetPath: "/")
+        let proxy = LocalFilteringProxy(
+            routes: [route],
+            fallbackTargetPort: server.port,
+            accessPolicy: MutableProxyAccessPolicy(allowlistEntries: []),
+            routeSecurityPolicies: MutableRouteSecurityPolicies(routes: [route]),
+            logHandler: { _ in }
+        )
+        let proxyPort = try proxy.start()
+        defer { proxy.stop() }
+
+        _ = try sendRawHTTPRequest(
+            "GET /dashboard HTTP/1.1\r\n" +
+                "Host: grafana.example.com\r\n" +
+                "Cookie: grafana_session=browser-session\r\n" +
+                "Connection: close\r\n" +
+                "\r\n",
+            port: proxyPort
+        )
+
+        XCTAssertEqual(requestCaptured.wait(timeout: .now() + 2), .success)
+        XCTAssertTrue(
+            capturedRequest.get().localizedCaseInsensitiveContains("Cookie: grafana_session=browser-session")
+        )
+    }
+
     private func request(
         proxyPort: Int,
         host: String,
@@ -267,13 +376,15 @@ final class LocalFilteringProxyTests: XCTestCase {
         return (statusCode, String(decoding: data, as: UTF8.self))
     }
 
-    private func sendRawHTTPRequest(_ request: String, port: Int) throws {
+    @discardableResult
+    private func sendRawHTTPRequest(_ request: String, port: Int) throws -> String {
         let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: UInt16(port))!, using: .tcp)
         let queue = DispatchQueue(label: "routingflare.tests.raw-client")
         let ready = DispatchSemaphore(value: 0)
         let sent = DispatchSemaphore(value: 0)
         let received = DispatchSemaphore(value: 0)
         let sendError = LockedValue<Error?>(nil)
+        let responseData = LockedValue(Data())
 
         connection.stateUpdateHandler = { state in
             if case .ready = state {
@@ -288,7 +399,10 @@ final class LocalFilteringProxyTests: XCTestCase {
             sent.signal()
         })
         XCTAssertEqual(sent.wait(timeout: .now() + 2), .success)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { _, _, _, _ in
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { data, _, _, _ in
+            if let data {
+                responseData.set(data)
+            }
             received.signal()
         }
         XCTAssertEqual(received.wait(timeout: .now() + 2), .success)
@@ -296,6 +410,7 @@ final class LocalFilteringProxyTests: XCTestCase {
         if let sendError = sendError.get() {
             throw sendError
         }
+        return String(decoding: responseData.get(), as: UTF8.self)
     }
 }
 
@@ -304,10 +419,19 @@ private final class TestHTTPServer {
 
     private let listener: NWListener
     private let queue = DispatchQueue(label: "routingflare.tests.http-server")
+    private let statusCode: Int
+    private let headers: [String: String]
     private let body: String
     private let onRequest: @Sendable (String) -> Void
 
-    init(body: String, onRequest: @escaping @Sendable (String) -> Void = { _ in }) throws {
+    init(
+        statusCode: Int = 200,
+        headers: [String: String] = [:],
+        body: String,
+        onRequest: @escaping @Sendable (String) -> Void = { _ in }
+    ) throws {
+        self.statusCode = statusCode
+        self.headers = headers
         self.body = body
         self.onRequest = onRequest
         let parameters = NWParameters.tcp
@@ -317,16 +441,19 @@ private final class TestHTTPServer {
         listener = try NWListener(using: parameters, on: .any)
 
         let ready = DispatchSemaphore(value: 0)
-        listener.newConnectionHandler = { [body, onRequest] connection in
+        listener.newConnectionHandler = { [statusCode, headers, body, onRequest] connection in
             connection.start(queue: DispatchQueue(label: "routingflare.tests.http-server.connection"))
             connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { data, _, _, _ in
                 if let data, let requestText = String(data: data, encoding: .utf8) {
                     onRequest(requestText)
                 }
                 let responseBody = Data(body.utf8)
-                var response = "HTTP/1.1 200 OK\r\n"
+                var response = "HTTP/1.1 \(statusCode) Test\r\n"
                 response += "Content-Length: \(responseBody.count)\r\n"
                 response += "Connection: close\r\n"
+                for (key, value) in headers {
+                    response += "\(key): \(value)\r\n"
+                }
                 response += "\r\n"
                 var data = Data(response.utf8)
                 data.append(responseBody)
@@ -368,5 +495,11 @@ private final class LockedValue<T>: @unchecked Sendable {
         lock.lock()
         self.value = value
         lock.unlock()
+    }
+
+    func mutate(_ update: (inout T) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        update(&value)
     }
 }
