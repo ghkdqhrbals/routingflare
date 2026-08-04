@@ -113,7 +113,48 @@ private enum AppTypography {
     static let meta = Font.system(size: 12, weight: .medium)
 }
 
-enum AppTab: String, CaseIterable, Identifiable {
+private enum TunnelConfigurationState {
+    case healthy
+    case starting
+    case down
+    case inactive
+
+    var label: String {
+        switch self {
+        case .healthy:
+            return "Healthy"
+        case .starting:
+            return "Starting"
+        case .down:
+            return "Down"
+        case .inactive:
+            return "Inactive"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .healthy:
+            return .green
+        case .starting:
+            return .orange
+        case .down:
+            return .red
+        case .inactive:
+            return .secondary
+        }
+    }
+}
+
+private struct TunnelConfigurationRow: Identifiable {
+    let id: String
+    let name: String
+    let state: TunnelConfigurationState
+    let replicas: Int
+    let routes: [String]
+}
+
+enum AppTab: String, CaseIterable, Identifiable, Hashable {
     case routes
     case options
     case logs
@@ -261,6 +302,7 @@ final class TunnelBarViewModel: ObservableObject {
     @Published var routeAuthSavedRecently = false
     @Published var selectedSecurityRouteKind: TunnelMode?
     @Published var selectedSecurityRoute: LocalProxyRoute?
+    @Published var dnsTunnelName = ""
     @Published var updateStatus: UpdateStatus = .idle
     @Published var latestUpdateURL: URL?
     @Published private var dnsCloudflaredIssue: String?
@@ -275,6 +317,7 @@ final class TunnelBarViewModel: ObservableObject {
     private var cliCommandObserver: NSObjectProtocol?
     private var cloudflaredConfigURL: URL?
     private var activeTunnelModes: Set<TunnelMode> = []
+    private var resolvedDNSTunnelIdentity: String?
     private static let releaseAPIURL = URL(string: "https://api.github.com/repos/ghkdqhrbals/routingflare/releases/latest")!
     static let projectPageURL = URL(string: "https://ghkdqhrbals.github.io/routingflare/")!
     static let releasesURL = URL(string: "https://github.com/ghkdqhrbals/routingflare/releases/latest")!
@@ -330,6 +373,7 @@ final class TunnelBarViewModel: ObservableObject {
         handlePendingCLICommand()
         autoInstallCLIIfNeeded()
         autoInstallCloudflaredIfNeeded()
+        resolveDNSTunnelNameIfNeeded()
         if loaded.autoStart {
             Task { @MainActor in
                 self.start()
@@ -400,6 +444,7 @@ final class TunnelBarViewModel: ObservableObject {
         normalizeLists()
         updateRouteSecurityPolicies()
         settingsStore.save(settings)
+        resolveDNSTunnelNameIfNeeded()
         saveRouteStatusSnapshot()
     }
 
@@ -568,6 +613,7 @@ final class TunnelBarViewModel: ObservableObject {
         newDNSPortText = String(settings.dnsTargetPort)
         newQuickPortText = String(settings.targetPort)
         updateAccessPolicy()
+        resolveDNSTunnelNameIfNeeded()
         if wasStarted {
             requiresRestart = true
             appendLog("Settings updated from CLI. Restart to apply route changes.")
@@ -584,6 +630,56 @@ final class TunnelBarViewModel: ObservableObject {
             appendLog("cloudflared was not found. Install it before starting a tunnel.")
         }
         saveSettings()
+    }
+
+    private func resolveDNSTunnelNameIfNeeded() {
+        let tunnelID = settings.dnsTunnelID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tunnelID.isEmpty,
+              let cloudflared = CloudflaredLocator().find(configuredPath: settings.cloudflaredPath) else {
+            dnsTunnelName = ""
+            resolvedDNSTunnelIdentity = nil
+            return
+        }
+
+        let identity = "\(cloudflared)|\(tunnelID)"
+        guard resolvedDNSTunnelIdentity != identity else {
+            return
+        }
+        resolvedDNSTunnelIdentity = identity
+
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let process = Process()
+            let pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: cloudflared)
+            process.arguments = ["tunnel", "info", tunnelID]
+            process.standardOutput = pipe
+            process.standardError = pipe
+
+            do {
+                try process.run()
+                process.waitUntilExit()
+                let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                let name = CloudflaredTunnelInfoParser.parseName(from: output)
+                DispatchQueue.main.async {
+                    guard let self,
+                          self.settings.dnsTunnelID.trimmingCharacters(in: .whitespacesAndNewlines) == tunnelID else {
+                        return
+                    }
+                    self.dnsTunnelName = name ?? ""
+                    if let name {
+                        self.appendLog("Resolved DNS tunnel: \(name)")
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    guard let self,
+                          self.settings.dnsTunnelID.trimmingCharacters(in: .whitespacesAndNewlines) == tunnelID else {
+                        return
+                    }
+                    self.dnsTunnelName = ""
+                }
+            }
+        }
     }
 
     func installCloudflaredWithBrew() {
@@ -1665,6 +1761,72 @@ final class TunnelBarViewModel: ObservableObject {
         return quickURLs + dnsURLs
     }
 
+    fileprivate var tunnelConfigurationRows: [TunnelConfigurationRow] {
+        var rows: [TunnelConfigurationRow] = []
+
+        if !allQuickRoutes.isEmpty {
+            let openRoutes = activeQuickRoutes
+            let pending = openRoutes.contains(where: quickRouteIsPending)
+            let healthy = !openRoutes.isEmpty && openRoutes.allSatisfy { quickRouteIsOpen($0) }
+            let state: TunnelConfigurationState
+            if openRoutes.isEmpty {
+                state = .inactive
+            } else if pending {
+                state = .starting
+            } else if healthy && activeTunnelModes.contains(.quickURL) && !requiresRestart {
+                state = .healthy
+            } else {
+                state = .down
+            }
+
+            rows.append(TunnelConfigurationRow(
+                id: "quick",
+                name: "Random DNS",
+                state: state,
+                replicas: quickSessions.count,
+                routes: openRoutes.map { quickRouteFrom($0) }
+            ))
+        }
+
+        if !allDNSRoutes.isEmpty || !settings.dnsTunnelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let tunnelID = settings.dnsTunnelID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let openRoutes = activeDNSRoutes
+            let hasConfiguration = !tunnelID.isEmpty && !settings.dnsCredentialsFile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let state: TunnelConfigurationState
+            if openRoutes.isEmpty {
+                state = .inactive
+            } else if !hasConfiguration || dnsUnavailableReason != nil {
+                state = .down
+            } else if status == .starting {
+                state = .starting
+            } else if activeTunnelModes.contains(.dns) && !requiresRestart {
+                state = .healthy
+            } else {
+                state = .down
+            }
+
+            rows.append(TunnelConfigurationRow(
+                id: "dns",
+                name: dnsTunnelName.isEmpty
+                    ? (tunnelID.isEmpty ? "DNS tunnel" : "DNS tunnel · \(tunnelID)")
+                    : dnsTunnelName,
+                state: state,
+                replicas: activeTunnelModes.contains(.dns) ? 1 : 0,
+                routes: openRoutes.map { "\($0.hostname)\($0.targetPath == "/" ? "" : $0.targetPath)" }
+            ))
+        }
+
+        return rows
+    }
+
+    fileprivate var currentCloudflaredPath: String {
+        effectiveCloudflaredPath.isEmpty ? "Not found" : effectiveCloudflaredPath
+    }
+
+    fileprivate var currentDNSConfigPath: String? {
+        cloudflaredConfigURL?.path
+    }
+
     func quickRouteFrom(_ route: LocalProxyRoute) -> String {
         guard let url = quickPublicURLs[route], let host = url.host else {
             if quickRouteIsPending(route) {
@@ -2157,15 +2319,12 @@ private struct AboutPanelView: View {
         Button {
             model.openKoFiPage()
         } label: {
-            AsyncImage(url: TunnelBarViewModel.koFiImageURL) { phase in
-                switch phase {
-                case .success(let image):
-                    image
+            Group {
+                if let image = NSImage(named: "KoFiButton") {
+                    Image(nsImage: image)
                         .resizable()
                         .scaledToFit()
-                case .failure, .empty:
-                    coffeeFallbackLabel
-                @unknown default:
+                } else {
                     coffeeFallbackLabel
                 }
             }
@@ -2292,13 +2451,11 @@ private struct AboutPanelView: View {
 
 struct AppWindowView: View {
     @ObservedObject var model: TunnelBarViewModel
-    @State private var isShowingAddRoutePopover = false
-    @State private var addRouteMode: TunnelMode = .quickURL
 
     var body: some View {
         HSplitView {
             sidebar
-                .frame(minWidth: 206, idealWidth: 220, maxWidth: 260, maxHeight: .infinity)
+                .frame(minWidth: 190, idealWidth: 208, maxWidth: 240, maxHeight: .infinity)
 
             detail
                 .frame(minWidth: 640, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -2307,73 +2464,51 @@ struct AppWindowView: View {
     }
 
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(AppTab.allCases) { tab in
-                        sidebarRow(tab)
-                    }
+        List(selection: sidebarSelection) {
+            Section {
+                ForEach(AppTab.allCases) { tab in
+                    Text(tab.label)
+                        .font(.system(size: 14, weight: model.selectedTab == tab ? .semibold : .regular))
+                        .tag(tab)
                 }
-                .padding(.horizontal, 10)
-                .padding(.top, 34)
-                .padding(.bottom, 18)
             }
         }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
         .background(Color(nsColor: .underPageBackgroundColor).opacity(0.72))
+    }
+
+    private var sidebarSelection: Binding<AppTab?> {
+        Binding(
+            get: { model.selectedTab },
+            set: { newTab in
+                guard let newTab else { return }
+                model.selectTab(newTab)
+            }
+        )
     }
 
     private var detail: some View {
         VStack(alignment: .leading, spacing: 18) {
             detailHeader
 
-            MenuContentView(
-                model: model,
-                showsHeader: false,
-                showsRoutes: false,
-                showsTabs: false,
-                showsFooter: false
-            )
-            .padding(0)
+            ScrollView(.vertical) {
+                MenuContentView(
+                    model: model,
+                    showsHeader: false,
+                    showsRoutes: false,
+                    showsTabs: false,
+                    showsFooter: false
+                )
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .padding(.bottom, 8)
+            }
+            .scrollIndicators(.visible)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .padding(.top, 34)
         .padding(.horizontal, 34)
         .padding(.bottom, 28)
-    }
-
-    private func sidebarRow(_ tab: AppTab) -> some View {
-        Button {
-            model.selectTab(tab)
-        } label: {
-            HStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(tab.label)
-                        .font(.system(size: 15, weight: model.selectedTab == tab ? .semibold : .medium))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    if let subtitle = tab.subtitle {
-                        Text(subtitle.lowercased())
-                            .font(AppTypography.meta)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                            .truncationMode(.tail)
-                    }
-                }
-                Spacer()
-            }
-            .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 3)
-            .contentShape(Rectangle())
-            .background {
-                if model.selectedTab == tab {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.accentColor.opacity(0.18))
-                }
-            }
-        }
-        .buttonStyle(.plain)
     }
 
     private var detailHeader: some View {
@@ -2383,24 +2518,6 @@ struct AppWindowView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            if model.selectedTab == .routes {
-                Button {
-                    isShowingAddRoutePopover.toggle()
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(width: 28, height: 28)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                .sheet(isPresented: $isShowingAddRoutePopover) {
-                    AddRoutePopoverView(
-                        model: model,
-                        mode: $addRouteMode,
-                        isPresented: $isShowingAddRoutePopover
-                    )
-                }
-            }
         }
     }
 
@@ -2409,6 +2526,9 @@ struct AppWindowView: View {
 struct MenuContentView: View {
     @ObservedObject var model: TunnelBarViewModel
     @State private var showsAuthSecret = false
+    @State private var expandedTunnelID: String?
+    @State private var isShowingAddRoutePopover = false
+    @State private var addRouteMode: TunnelMode = .quickURL
     var showsHeader = true
     var showsRoutes = true
     var showsTabs = true
@@ -2432,7 +2552,7 @@ struct MenuContentView: View {
             }
         }
         .padding(showsTabs ? 16 : 0)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .transaction { transaction in
             transaction.animation = nil
         }
@@ -2463,7 +2583,7 @@ struct MenuContentView: View {
     @ViewBuilder
     private var tabContent: some View {
         if model.selectedTab == .routes {
-            routesTable
+            tunnelConfigurationsTable
         } else if model.selectedTab == .options {
             optionsControls
         } else if model.selectedTab == .logs {
@@ -2471,6 +2591,267 @@ struct MenuContentView: View {
         } else if model.selectedTab == .about {
             AboutPanelView(model: model)
         }
+    }
+
+    private var tunnelConfigurationsTable: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center) {
+                Text("Tunnels")
+                    .font(AppTypography.sectionTitle)
+                Spacer()
+                Button {
+                    addRouteMode = .quickURL
+                    isShowingAddRoutePopover = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 26, height: 26)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .help("Add a tunnel route")
+                .sheet(isPresented: $isShowingAddRoutePopover) {
+                    AddRoutePopoverView(
+                        model: model,
+                        mode: $addRouteMode,
+                        isPresented: $isShowingAddRoutePopover
+                    )
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 12) {
+                    Text("Name")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Status")
+                        .frame(width: 92, alignment: .leading)
+                    Text("Replicas")
+                        .frame(width: 72, alignment: .leading)
+                    Text("Routes")
+                        .frame(width: 240, alignment: .leading)
+                }
+                .font(AppTypography.meta)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+
+                if model.tunnelConfigurationRows.isEmpty {
+                    Text("No tunnel configuration")
+                        .font(AppTypography.content)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 12)
+                } else {
+                    ForEach(model.tunnelConfigurationRows) { row in
+                        VStack(alignment: .leading, spacing: 0) {
+                            tunnelConfigurationRow(row)
+                            if expandedTunnelID == row.id {
+                                tunnelConfigurationDetail(row)
+                            }
+                        }
+                    }
+                }
+            }
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.28))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private func tunnelConfigurationRow(_ row: TunnelConfigurationRow) -> some View {
+        Button {
+            withAnimation(.easeOut(duration: 0.16)) {
+                expandedTunnelID = expandedTunnelID == row.id ? nil : row.id
+            }
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Text(row.name)
+                    .font(AppTypography.contentStrong)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(row.state.label)
+                    .font(AppTypography.meta)
+                    .foregroundStyle(row.state.color)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(row.state.color.opacity(0.13))
+                    .clipShape(Capsule())
+                    .frame(width: 92, alignment: .leading)
+
+                Text(String(row.replicas))
+                    .font(AppTypography.content)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 72, alignment: .leading)
+
+                if row.routes.isEmpty {
+                    Text("No routes")
+                        .font(AppTypography.meta)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 240, alignment: .leading)
+                } else {
+                    Text(row.routes.count == 1 ? "1 route" : "\(row.routes.count) routes")
+                        .font(AppTypography.meta)
+                        .foregroundStyle(.primary)
+                        .frame(width: 240, alignment: .leading)
+                        .help(row.routes.joined(separator: "\n"))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .top) {
+            Divider()
+                .opacity(0.45)
+        }
+    }
+
+    private func tunnelConfigurationDetail(_ row: TunnelConfigurationRow) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            detailLine("Status", row.state.label)
+            detailLine("Replicas", String(row.replicas))
+            detailLine("cloudflared", model.currentCloudflaredPath)
+
+            if row.id == "dns" {
+                let tunnelID = model.settings.dnsTunnelID.trimmingCharacters(in: .whitespacesAndNewlines)
+                let credentials = model.settings.dnsCredentialsFile.trimmingCharacters(in: .whitespacesAndNewlines)
+                detailLine("Type", "cloudflared")
+                detailLine("Tunnel ID", tunnelID.isEmpty ? "Not configured" : tunnelID)
+                detailLine("Credentials", credentials.isEmpty ? "Not configured" : credentials)
+                if let configPath = model.currentDNSConfigPath {
+                    detailLine("Runtime config", configPath)
+                }
+            } else {
+                detailLine("Type", "Quick Tunnel")
+                detailLine("Address", row.routes.isEmpty ? "Not assigned" : row.routes.joined(separator: ", "))
+            }
+
+            if !row.routes.isEmpty {
+                detailLine("Routes", row.routes.joined(separator: ", "))
+            }
+
+            tunnelRouteList(for: row.id)
+        }
+        .font(AppTypography.meta)
+        .padding(.leading, 24)
+        .padding(.trailing, 12)
+        .padding(.bottom, 12)
+        .textSelection(.enabled)
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.16))
+    }
+
+    private func detailLine(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(label)
+                .foregroundStyle(.secondary)
+                .frame(width: 92, alignment: .leading)
+            Text(value)
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(value)
+        }
+    }
+
+    @ViewBuilder
+    private func tunnelRouteList(for tunnelID: String) -> some View {
+        let isQuick = tunnelID == "quick"
+        let routes = isQuick ? model.allQuickRoutes : model.allDNSRoutes
+
+        VStack(alignment: .leading, spacing: 7) {
+            Text("Routes")
+                .font(AppTypography.contentStrong)
+                .foregroundStyle(.primary)
+
+            ForEach(routes, id: \.self) { route in
+                let selected = model.selectedSecurityRouteKind == (isQuick ? .quickURL : .dns) &&
+                    model.selectedSecurityRoute == route
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 8) {
+                        Button {
+                            model.selectRouteForSecurity(route, kind: isQuick ? .quickURL : .dns)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(tunnelRouteDotColor(route, isQuick: isQuick))
+                                    .frame(width: 7, height: 7)
+                                Text(tunnelRouteName(route, isQuick: isQuick))
+                                    .font(AppTypography.content)
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Spacer(minLength: 10)
+                                Text("127.0.0.1:\(route.targetPort)")
+                                    .font(AppTypography.meta)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        Toggle("", isOn: Binding(
+                            get: { route.isOpen },
+                            set: { _ in
+                                if isQuick {
+                                    model.toggleQuickRoute(route)
+                                } else {
+                                    model.toggleDNSRoute(route)
+                                }
+                            }
+                        ))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .controlSize(.mini)
+
+                        Button {
+                            if isQuick {
+                                model.removeQuickRoute(route)
+                            } else {
+                                model.removeDNSRoute(route)
+                            }
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.vertical, 6)
+
+                    if selected {
+                        RouteSecurityInlineView(model: model)
+                            .padding(.leading, 16)
+                    }
+                }
+                .background(selected ? Color.accentColor.opacity(0.12) : .clear)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+        }
+        .padding(.top, 8)
+    }
+
+    private func tunnelRouteName(_ route: LocalProxyRoute, isQuick: Bool) -> String {
+        if isQuick {
+            return model.quickRouteFrom(route)
+        }
+        return "\(route.hostname)\(route.targetPath == "/" ? "" : route.targetPath)"
+    }
+
+    private func tunnelRouteDotColor(_ route: LocalProxyRoute, isQuick: Bool) -> Color {
+        if !route.isOpen {
+            return .secondary
+        }
+        if isQuick {
+            if model.quickRouteIsPending(route) {
+                return .orange
+            }
+            return model.quickRouteIsOpen(route) ? .green : .orange
+        }
+        if model.dnsUnavailableReason != nil {
+            return .orange
+        }
+        return model.dnsRouteIsOpen(route) ? .green : .orange
     }
 
     private var header: some View {

@@ -39,6 +39,7 @@ sed \
 
 cp "$ROOT_DIR/Resources/TunnelBar.entitlements" "$RESOURCES_DIR/TunnelBar.entitlements"
 cp "$ROOT_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
+cp "$ROOT_DIR/Resources/KoFiButton.png" "$RESOURCES_DIR/KoFiButton.png"
 
 if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
   codesign \

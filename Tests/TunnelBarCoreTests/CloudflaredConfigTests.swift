@@ -2,6 +2,23 @@ import XCTest
 @testable import TunnelBarCore
 
 final class CloudflaredConfigTests: XCTestCase {
+    func testParsesNamedTunnelNameFromCloudflaredInfo() {
+        let output = """
+        NAME:     routingflare-dev
+        ID:       bfa54c97-8cd1-4678-b283-0efb3c66022e
+        CREATED:  2026-07-05 19:21:15.966352 +0000 UTC
+        """
+
+        XCTAssertEqual(
+            CloudflaredTunnelInfoParser.parseName(from: output),
+            "routingflare-dev"
+        )
+    }
+
+    func testMissingNamedTunnelNameReturnsNil() {
+        XCTAssertNil(CloudflaredTunnelInfoParser.parseName(from: "ID: tunnel-id"))
+    }
+
     func testRendersNamedTunnelIngressToProxyPort() {
         let config = CloudflaredConfigRenderer.renderNamedTunnelConfig(
             tunnelID: "24c83c3f-3c20-402f-a9ca-247ca8d25fbb",
