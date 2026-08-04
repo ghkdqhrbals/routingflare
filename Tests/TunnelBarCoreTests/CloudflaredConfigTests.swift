@@ -19,6 +19,15 @@ final class CloudflaredConfigTests: XCTestCase {
         XCTAssertNil(CloudflaredTunnelInfoParser.parseName(from: "ID: tunnel-id"))
     }
 
+    func testParsesNamedTunnelNameFromJSONInfo() {
+        let output = #"{"id":"bfa54c97-8cd1-4678-b283-0efb3c66022e","name":"routingflare-dev","conns":[]}"#
+
+        XCTAssertEqual(
+            CloudflaredTunnelInfoParser.parseName(from: output),
+            "routingflare-dev"
+        )
+    }
+
     func testRendersNamedTunnelIngressToProxyPort() {
         let config = CloudflaredConfigRenderer.renderNamedTunnelConfig(
             tunnelID: "24c83c3f-3c20-402f-a9ca-247ca8d25fbb",

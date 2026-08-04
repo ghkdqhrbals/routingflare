@@ -651,7 +651,9 @@ final class TunnelBarViewModel: ObservableObject {
             let process = Process()
             let pipe = Pipe()
             process.executableURL = URL(fileURLWithPath: cloudflared)
-            process.arguments = ["tunnel", "info", tunnelID]
+            // JSON output gives us the canonical tunnel name instead of relying on
+            // the human-readable table format, which can change between versions.
+            process.arguments = ["tunnel", "info", "--output", "json", tunnelID]
             process.standardOutput = pipe
             process.standardError = pipe
 
@@ -668,6 +670,10 @@ final class TunnelBarViewModel: ObservableObject {
                     self.dnsTunnelName = name ?? ""
                     if let name {
                         self.appendLog("Resolved DNS tunnel: \(name)")
+                    } else {
+                        // A failed lookup must remain retryable; otherwise the
+                        // UUID fallback can stay visible for the whole session.
+                        self.resolvedDNSTunnelIdentity = nil
                     }
                 }
             } catch {
@@ -677,6 +683,9 @@ final class TunnelBarViewModel: ObservableObject {
                         return
                     }
                     self.dnsTunnelName = ""
+                    // Do not permanently cache a failed lookup. A later save,
+                    // reload, or settings refresh should be able to resolve it.
+                    self.resolvedDNSTunnelIdentity = nil
                 }
             }
         }
