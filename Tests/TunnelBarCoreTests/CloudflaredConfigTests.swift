@@ -28,6 +28,14 @@ final class CloudflaredConfigTests: XCTestCase {
         )
     }
 
+    func testParsesNameFromCleanJSONWhenCloudflaredWritesWarningsToStderr() {
+        let stdout = #"{"id":"bfa54c97-8cd1-4678-b283-0efb3c66022e","name":"routingflare-dev"}"#
+        let stderr = "2026-08-04T15:00:00Z WRN Your version is outdated"
+
+        XCTAssertEqual(CloudflaredTunnelInfoParser.parseName(from: stdout), "routingflare-dev")
+        XCTAssertFalse(stderr.isEmpty)
+    }
+
     func testRendersNamedTunnelIngressToProxyPort() {
         let config = CloudflaredConfigRenderer.renderNamedTunnelConfig(
             tunnelID: "24c83c3f-3c20-402f-a9ca-247ca8d25fbb",

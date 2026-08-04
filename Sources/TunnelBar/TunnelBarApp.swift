@@ -649,18 +649,22 @@ final class TunnelBarViewModel: ObservableObject {
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let process = Process()
-            let pipe = Pipe()
+            let outputPipe = Pipe()
+            let errorPipe = Pipe()
             process.executableURL = URL(fileURLWithPath: cloudflared)
             // JSON output gives us the canonical tunnel name instead of relying on
             // the human-readable table format, which can change between versions.
             process.arguments = ["tunnel", "info", "--output", "json", tunnelID]
-            process.standardOutput = pipe
-            process.standardError = pipe
+            // Keep stderr out of the JSON stream. cloudflared may print warnings
+            // there even when the JSON response is valid.
+            process.standardOutput = outputPipe
+            process.standardError = errorPipe
 
             do {
                 try process.run()
                 process.waitUntilExit()
-                let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                let errorOutput = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
                 let name = CloudflaredTunnelInfoParser.parseName(from: output)
                 DispatchQueue.main.async {
                     guard let self,
@@ -671,6 +675,9 @@ final class TunnelBarViewModel: ObservableObject {
                     if let name {
                         self.appendLog("Resolved DNS tunnel: \(name)")
                     } else {
+                        if !errorOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            self.appendLog("Tunnel name lookup failed: \(errorOutput.trimmingCharacters(in: .whitespacesAndNewlines))")
+                        }
                         // A failed lookup must remain retryable; otherwise the
                         // UUID fallback can stay visible for the whole session.
                         self.resolvedDNSTunnelIdentity = nil
