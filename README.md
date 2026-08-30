@@ -37,6 +37,18 @@ Manual install:
 - Updates: check, install, and restart from the app.
 - CLI: add, remove, list, start, stop, update, and edit settings from Terminal.
 
+### Streaming
+
+The local proxy streams uploads and responses, preserves WebSocket connections,
+and supports HTTP/2 and native gRPC to an h2c local server.
+
+- **SSE:** use a named DNS tunnel. Cloudflare Random DNS does not support SSE.
+- **gRPC:** tested through the local proxy, but Cloudflare Tunnel does not support
+  native gRPC on public hostnames. Private networking is a separate setup.
+- Route security is checked on every new request or WebSocket handshake.
+
+See [protocol support and limitations](docs/proxy-design.md).
+
 ## CLI
 
 routingflare installs its CLI automatically when the app opens:

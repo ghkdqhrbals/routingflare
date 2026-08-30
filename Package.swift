@@ -26,6 +26,11 @@ let package = Package(
         .testTarget(
             name: "TunnelBarCoreTests",
             dependencies: ["TunnelBarCore"]
+        ),
+        .executableTarget(
+            name: "ProxyIntegrationHost",
+            dependencies: ["TunnelBarCore"],
+            path: "TestSupport/ProxyIntegrationHost"
         )
     ]
 )

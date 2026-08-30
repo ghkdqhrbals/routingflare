@@ -145,89 +145,7 @@ final class LocalFilteringProxyTests: XCTestCase {
         XCTAssertEqual(allowedAdmin.statusCode, 200)
         XCTAssertEqual(allowedAdmin.body, "admin")
     }
-
-    func testResponseHeaderFilterRemovesHopByHopHeaders() {
-        let headers = [
-            "Content-Type": "application/json",
-            "Content-Length": "128",
-            "Connection": "X-Origin-Hop, keep-alive",
-            "X-Origin-Hop": "remove-me",
-            "Transfer-Encoding": "Identity",
-            "Keep-Alive": "timeout=5",
-            "TE": "trailers",
-            "Trailer": "Expires",
-            "Upgrade": "websocket",
-            "Proxy-Authenticate": "Basic",
-            "Proxy-Authorization": "Basic token",
-            "X-App": "ok"
-        ]
-
-        let filtered = Dictionary(
-            uniqueKeysWithValues: HTTPProxyHeaderFilter.responseHeaders(from: headers)
-                .map { ($0.key.lowercased(), $0.value) }
-        )
-
-        XCTAssertEqual(filtered["content-type"], "application/json")
-        XCTAssertEqual(filtered["x-app"], "ok")
-        XCTAssertNil(filtered["content-length"])
-        XCTAssertNil(filtered["connection"])
-        XCTAssertNil(filtered["x-origin-hop"])
-        XCTAssertNil(filtered["transfer-encoding"])
-        XCTAssertNil(filtered["keep-alive"])
-        XCTAssertNil(filtered["te"])
-        XCTAssertNil(filtered["trailer"])
-        XCTAssertNil(filtered["upgrade"])
-        XCTAssertNil(filtered["proxy-authenticate"])
-        XCTAssertNil(filtered["proxy-authorization"])
-    }
-
-    func testRequestHeaderFilterRemovesHopByHopHeaders() {
-        let headers = [
-            "Host": "lowfidev.cloud",
-            "Content-Type": "application/json",
-            "Content-Length": "128",
-            "Connection": "Transfer-Encoding, X-Origin-Hop",
-            "X-Origin-Hop": "remove-me",
-            "Transfer-Encoding": "Identity",
-            "Keep-Alive": "timeout=5",
-            "TE": "trailers",
-            "Trailer": "Expires",
-            "Upgrade": "websocket",
-            "X-App": "ok"
-        ]
-
-        let filtered = Dictionary(
-            uniqueKeysWithValues: HTTPProxyHeaderFilter.requestHeaders(from: headers)
-                .map { ($0.key.lowercased(), $0.value) }
-        )
-
-        XCTAssertEqual(filtered["content-type"], "application/json")
-        XCTAssertEqual(filtered["x-app"], "ok")
-        XCTAssertNil(filtered["host"])
-        XCTAssertNil(filtered["content-length"])
-        XCTAssertNil(filtered["connection"])
-        XCTAssertNil(filtered["x-origin-hop"])
-        XCTAssertNil(filtered["transfer-encoding"])
-        XCTAssertNil(filtered["keep-alive"])
-        XCTAssertNil(filtered["te"])
-        XCTAssertNil(filtered["trailer"])
-        XCTAssertNil(filtered["upgrade"])
-    }
-
-    func testWebSocketUpgradeRequestIsDetectedAndOriginalBytesArePreserved() throws {
-        let raw = "GET /socket HTTP/1.1\r\n" +
-            "Host: public.example.com\r\n" +
-            "Connection: keep-alive, Upgrade\r\n" +
-            "Upgrade: websocket\r\n" +
-            "Sec-WebSocket-Version: 13\r\n" +
-            "Sec-WebSocket-Key: abc123\r\n\r\n"
-        let request = try XCTUnwrap(HTTPProxyRequest(data: Data(raw.utf8)))
-
-        XCTAssertTrue(request.isWebSocketUpgrade)
-        XCTAssertEqual(request.rawData, Data(raw.utf8))
-    }
-
-    func testProxyDoesNotForwardIdentityTransferEncodingToOrigin() throws {
+    func testProxyRejectsUnsupportedTransferEncodingWithoutContactingOrigin() throws {
         let capturedRequest = LockedValue("")
         let requestCaptured = DispatchSemaphore(value: 0)
         let server = try TestHTTPServer(body: "ok") { requestText in
@@ -254,13 +172,11 @@ final class LocalFilteringProxyTests: XCTestCase {
             "X-Origin-Hop: remove-me\r\n" +
             "X-App: ok\r\n" +
             "\r\n"
-        try sendRawHTTPRequest(request, port: proxyPort)
+        let response = try sendRawHTTPRequest(request, port: proxyPort)
 
-        XCTAssertEqual(requestCaptured.wait(timeout: .now() + 2), .success)
-        let originRequest = capturedRequest.get()
-        XCTAssertTrue(originRequest.contains("X-App: ok"))
-        XCTAssertFalse(originRequest.localizedCaseInsensitiveContains("Transfer-Encoding:"))
-        XCTAssertFalse(originRequest.localizedCaseInsensitiveContains("X-Origin-Hop:"))
+        XCTAssertTrue(response.hasPrefix("HTTP/1.1 501"))
+        XCTAssertEqual(requestCaptured.wait(timeout: .now() + 0.1), .timedOut)
+        XCTAssertTrue(capturedRequest.get().isEmpty)
     }
 
     func testProxyReturnsOriginRedirectAndSetCookieToClient() throws {
@@ -412,12 +328,14 @@ final class LocalFilteringProxyTests: XCTestCase {
             sent.signal()
         })
         XCTAssertEqual(sent.wait(timeout: .now() + 2), .success)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { data, _, _, _ in
-            if let data {
-                responseData.set(data)
+        @Sendable func readResponse() {
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { data, _, complete, error in
+                if let data { responseData.mutate { $0.append(data) } }
+                if complete || error != nil { received.signal() }
+                else { readResponse() }
             }
-            received.signal()
         }
+        readResponse()
         XCTAssertEqual(received.wait(timeout: .now() + 2), .success)
         connection.cancel()
         if let sendError = sendError.get() {

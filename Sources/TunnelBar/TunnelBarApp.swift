@@ -306,6 +306,8 @@ final class TunnelBarViewModel: ObservableObject {
     @Published var updateStatus: UpdateStatus = .idle
     @Published var latestUpdateURL: URL?
     @Published private var dnsCloudflaredIssue: String?
+    @Published private var dnsProxyIssue: String?
+    @Published private var quickProxyIssues: [LocalProxyRoute: String] = [:]
 
     private let settingsStore: SettingsStoring
     private let routeStatusStore: RouteStatusStoring
@@ -314,6 +316,8 @@ final class TunnelBarViewModel: ObservableObject {
     private let routeSecurityPolicies: MutableRouteSecurityPolicies
     private var proxy: LocalFilteringProxy?
     private var quickSessions: [QuickTunnelSession] = []
+    private var dnsProxyGeneration = UUID()
+    private var quickProxyGenerations: [LocalProxyRoute: UUID] = [:]
     private var cliCommandObserver: NSObjectProtocol?
     private var cloudflaredConfigURL: URL?
     private var activeTunnelModes: Set<TunnelMode> = []
@@ -397,6 +401,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     var dnsUnavailableReason: String? {
+        if let dnsProxyIssue { return dnsProxyIssue }
         if let dnsCloudflaredIssue {
             return dnsCloudflaredIssue
         }
@@ -479,6 +484,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func quickRouteRuntimeState(_ route: LocalProxyRoute) -> RouteRuntimeState {
+        if quickProxyIssue(for: route) != nil { return .error }
         if requiresRestart {
             return .restartRequired
         }
@@ -495,6 +501,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func quickRouteRuntimeMessage(_ route: LocalProxyRoute) -> String? {
+        if let issue = quickProxyIssue(for: route) { return issue }
         if quickRouteIsPending(route) {
             return "Fetching URL"
         }
@@ -505,6 +512,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private var dnsRouteRuntimeState: RouteRuntimeState {
+        if dnsProxyIssue != nil { return .error }
         if let dnsCloudflaredIssue, !dnsCloudflaredIssue.isEmpty {
             return activeTunnelModes.contains(.dns) ? .degraded : .error
         }
@@ -524,6 +532,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private var dnsRouteRuntimeMessage: String? {
+        if let dnsProxyIssue { return dnsProxyIssue }
         if let dnsCloudflaredIssue, !dnsCloudflaredIssue.isEmpty {
             return dnsCloudflaredIssue
         }
@@ -817,6 +826,9 @@ final class TunnelBarViewModel: ObservableObject {
     private func startDNSTunnel() throws {
             defer { saveRouteStatusSnapshot() }
             dnsCloudflaredIssue = nil
+            dnsProxyIssue = nil
+            let generation = UUID()
+            dnsProxyGeneration = generation
             let proxy: LocalFilteringProxy
             let logHandler: @Sendable (String) -> Void = { [weak self] line in
                 Task { @MainActor in
@@ -828,7 +840,15 @@ final class TunnelBarViewModel: ObservableObject {
                 fallbackTargetPort: settings.dnsTargetPort,
                 accessPolicy: accessPolicy,
                 routeSecurityPolicies: routeSecurityPolicies,
-                logHandler: logHandler
+                logHandler: logHandler,
+                onFailure: { [weak self] message in
+                    Task { @MainActor in
+                        guard let self, self.dnsProxyGeneration == generation else { return }
+                        self.dnsProxyIssue = message
+                        self.stopDNSTunnelOnly()
+                        self.applyDNSFailure(message)
+                    }
+                }
             )
             let proxyPort = try proxy.start()
             self.proxyPort = proxyPort
@@ -876,6 +896,9 @@ final class TunnelBarViewModel: ObservableObject {
     private func startQuickTunnel(_ route: LocalProxyRoute) throws {
         defer { saveRouteStatusSnapshot() }
         guard !quickSessions.contains(where: { $0.route == route }) else { return }
+        let generation = UUID()
+        quickProxyGenerations[route] = generation
+        quickProxyIssues[route] = nil
         let proxy = LocalFilteringProxy(
             routes: [route],
             fallbackTargetPort: route.targetPort,
@@ -884,6 +907,15 @@ final class TunnelBarViewModel: ObservableObject {
             logHandler: { [weak self] line in
                 Task { @MainActor in
                     self?.appendLog(line)
+                }
+            },
+            onFailure: { [weak self] message in
+                Task { @MainActor in
+                    guard let self, self.quickProxyGenerations[route] == generation else { return }
+                    self.stopQuickRouteSession(route)
+                    self.quickProxyIssues[route] = message
+                    if self.activeTunnelModes.isEmpty { self.status = .error(message) }
+                    self.saveRouteStatusSnapshot()
                 }
             }
         )
@@ -922,6 +954,10 @@ final class TunnelBarViewModel: ObservableObject {
 
     func stop() {
         defer { saveRouteStatusSnapshot() }
+        dnsProxyGeneration = UUID()
+        quickProxyGenerations = [:]
+        quickProxyIssues = [:]
+        dnsProxyIssue = nil
         tunnelProcess.stop()
         proxy?.stop()
         proxy = nil
@@ -1482,6 +1518,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func handleTunnelOutput(_ output: String) {
+        guard proxy?.port != nil else { return }
         defer { saveRouteStatusSnapshot() }
         let recoveredConnection = TunnelURLParser.outputShowsRegisteredConnection(output)
         let connectionRetryIssue = TunnelURLParser.outputShowsConnectionRetryIssue(output)
@@ -1517,6 +1554,7 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func handleQuickTunnelOutput(_ output: String, route: LocalProxyRoute) {
+        guard quickSessions.contains(where: { $0.route == route && $0.proxy.port != nil }) else { return }
         defer { saveRouteStatusSnapshot() }
         let recoveredConnection = TunnelURLParser.outputShowsRegisteredConnection(output)
         appendLog(output)
@@ -1536,6 +1574,7 @@ final class TunnelBarViewModel: ObservableObject {
 
     private func handleTunnelExit(mode: TunnelMode, statusCode: Int32) {
         defer { saveRouteStatusSnapshot() }
+        if mode == .dns, let dnsProxyIssue { applyDNSFailure(dnsProxyIssue); return }
         guard status != .stopped else { return }
         activeTunnelModes.remove(mode)
         if statusCode != 0 {
@@ -1588,6 +1627,8 @@ final class TunnelBarViewModel: ObservableObject {
     private func stopQuickRouteSession(_ route: LocalProxyRoute) {
         defer { saveRouteStatusSnapshot() }
         let normalized = normalizedRoute(route, wildcardHost: true)
+        quickProxyGenerations[normalized] = nil
+        quickProxyIssues[normalized] = nil
         quickPublicURLs[normalized] = nil
         if let index = quickSessions.firstIndex(where: { $0.route == normalized }) {
             let session = quickSessions.remove(at: index)
@@ -1646,6 +1687,7 @@ final class TunnelBarViewModel: ObservableObject {
 
     private func stopDNSTunnelOnly() {
         defer { saveRouteStatusSnapshot() }
+        dnsProxyGeneration = UUID()
         tunnelProcess.stop()
         proxy?.stop()
         proxy = nil
@@ -1855,6 +1897,10 @@ final class TunnelBarViewModel: ObservableObject {
 
     func quickRouteIsPending(_ route: LocalProxyRoute) -> Bool {
         quickPublicURLs[route] == nil && quickSessions.contains(where: { $0.route == route })
+    }
+
+    func quickProxyIssue(for route: LocalProxyRoute) -> String? {
+        quickProxyIssues[normalizedRoute(route, wildcardHost: true)]
     }
 
     func quickRouteIsOpen(_ route: LocalProxyRoute) -> Bool {
@@ -2157,6 +2203,7 @@ struct NativeMenuContentView: View {
         guard route.isOpen else {
             return .stopped
         }
+        if model.quickProxyIssue(for: route) != nil { return .error }
         if model.quickRouteIsPending(route) {
             return .pending
         }

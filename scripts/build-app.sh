@@ -21,6 +21,7 @@ RESOURCES_DIR="$CONTENTS_DIR/Resources"
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
+"$ROOT_DIR/scripts/build-proxy.sh"
 swift build -c "$CONFIGURATION" --product "$PRODUCT_NAME" --scratch-path "$ROOT_DIR/.build"
 swift build -c "$CONFIGURATION" --product "$CLI_PRODUCT_NAME" --scratch-path "$ROOT_DIR/.build"
 
@@ -28,6 +29,8 @@ cp "$BUILD_DIR/$PRODUCT_NAME" "$MACOS_DIR/$EXECUTABLE_NAME"
 chmod 755 "$MACOS_DIR/$EXECUTABLE_NAME"
 cp "$BUILD_DIR/$CLI_PRODUCT_NAME" "$MACOS_DIR/$CLI_PRODUCT_NAME"
 chmod 755 "$MACOS_DIR/$CLI_PRODUCT_NAME"
+cp "$ROOT_DIR/.build/proxy/routingflare-proxy" "$MACOS_DIR/routingflare-proxy"
+chmod 755 "$MACOS_DIR/routingflare-proxy"
 
 sed \
   -e "s/APP_BUNDLE_ID/$BUNDLE_ID/g" \
@@ -40,8 +43,10 @@ sed \
 cp "$ROOT_DIR/Resources/TunnelBar.entitlements" "$RESOURCES_DIR/TunnelBar.entitlements"
 cp "$ROOT_DIR/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 cp "$ROOT_DIR/Resources/KoFiButton.png" "$RESOURCES_DIR/KoFiButton.png"
+cp "$ROOT_DIR/Resources/ThirdPartyNotices.txt" "$RESOURCES_DIR/ThirdPartyNotices.txt"
 
 if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+  codesign --force --timestamp --options runtime --sign "$CODESIGN_IDENTITY" "$MACOS_DIR/routingflare-proxy"
   codesign \
     --force \
     --timestamp \

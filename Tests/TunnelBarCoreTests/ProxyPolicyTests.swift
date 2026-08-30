@@ -2,6 +2,33 @@ import XCTest
 @testable import TunnelBarCore
 
 final class ProxyPolicyTests: XCTestCase {
+    func testInvalidAllowlistFailsClosed() {
+        let policy = ProxyAccessPolicy(allowlistEntries: ["not-an-ip"])
+        XCTAssertFalse(policy.isAllowAll)
+        XCTAssertEqual(policy.decision(for: [:]), .blocked(sourceIP: nil))
+    }
+
+    func testEnabledEmptySecretFailsClosed() {
+        let policy = ProxyAccessPolicy(allowlistEntries: [], authHeader: ProxyAuthHeader(enabled: true, name: "X-Secret", secret: ""))
+        XCTAssertEqual(policy.decision(for: ["X-Secret": ""]), .blocked(sourceIP: nil))
+    }
+
+    func testEnabledEmptyHeaderNameFailsClosed() {
+        let policy = ProxyAccessPolicy(allowlistEntries: [], authHeader: ProxyAuthHeader(enabled: true, name: " ", secret: "secret"))
+        XCTAssertEqual(policy.decision(for: [:]), .blocked(sourceIP: nil))
+    }
+
+    func testDuplicateCaseInsensitiveSecurityHeadersDoNotCrashOrAuthorize() {
+        let policy = ProxyAccessPolicy(allowlistEntries: [], authHeader: ProxyAuthHeader(enabled: true, name: "X-Secret", secret: "secret"))
+        XCTAssertEqual(policy.decision(for: ["X-Secret": "secret", "x-secret": "secret"]), .blocked(sourceIP: nil))
+    }
+
+    func testEmptyAllowlistLinesAreIgnored() {
+        let policy = ProxyAccessPolicy(allowlistEntries: ["", "  "])
+        XCTAssertTrue(policy.isAllowAll)
+        XCTAssertEqual(policy.decision(for: [:]), .allowed(sourceIP: nil))
+    }
+
     func testAllowsRequestWhenHeaderAddressIsAllowed() throws {
         let policy = ProxyAccessPolicy(allowlistEntries: ["203.0.113.0/24"])
 

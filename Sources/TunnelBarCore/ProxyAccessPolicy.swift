@@ -19,10 +19,23 @@ public struct ProxyAccessPolicy: @unchecked Sendable {
     }
 
     public var isAllowAll: Bool {
-        (try? IPAllowlist(entries: entries).isEmpty) ?? true
+        (try? IPAllowlist(entries: entries).isEmpty) ?? false
+    }
+
+    var proxyConfiguration: RouteSecurity {
+        RouteSecurity(
+            allowlistEntries: entries,
+            authHeaderEnabled: authHeader.enabled,
+            authHeaderName: authHeader.name,
+            authHeaderSecret: authHeader.secret
+        )
     }
 
     public func decision(for headers: [String: String]) -> ProxyAccessDecision {
+        let names = headers.keys.map { $0.lowercased() }
+        guard Set(names).count == names.count else {
+            return .blocked(sourceIP: nil)
+        }
         guard authHeader.allows(headers: headers) else {
             return .blocked(sourceIP: sourceIP(from: headers))
         }
@@ -40,9 +53,7 @@ public struct ProxyAccessPolicy: @unchecked Sendable {
     }
 
     private func sourceIP(from headers: [String: String]) -> String? {
-        let normalized = Dictionary(uniqueKeysWithValues: headers.map { key, value in
-            (key.lowercased(), value)
-        })
+        let normalized = Dictionary(headers.map { ($0.key.lowercased(), $0.value) }, uniquingKeysWith: { first, _ in first })
 
         if let cfConnectingIP = normalized["cf-connecting-ip"]?.trimmingCharacters(in: .whitespacesAndNewlines),
            !cfConnectingIP.isEmpty {
@@ -112,18 +123,20 @@ public struct ProxyAuthHeader: Equatable, Sendable {
     }
 
     public func allows(headers: [String: String]) -> Bool {
-        guard isActive else { return true }
+        guard enabled else { return true }
+        guard isActive else { return false }
         let normalizedName = name.lowercased()
-        let value = headers.first { key, _ in
+        let matches = headers.filter { key, _ in
             key.lowercased() == normalizedName
-        }?.value
-        return value == secret
+        }
+        return matches.count == 1 && matches.first?.value == secret
     }
 }
 
 public final class MutableProxyAccessPolicy {
     private let lock = NSLock()
     private var policy: ProxyAccessPolicy
+    private var observers: [UUID: @Sendable () -> Void] = [:]
 
     public init(allowlistEntries: [String], authHeader: ProxyAuthHeader = .disabled) {
         self.policy = ProxyAccessPolicy(allowlistEntries: allowlistEntries, authHeader: authHeader)
@@ -132,6 +145,22 @@ public final class MutableProxyAccessPolicy {
     public func update(allowlistEntries: [String], authHeader: ProxyAuthHeader = .disabled) {
         lock.lock()
         policy = ProxyAccessPolicy(allowlistEntries: allowlistEntries, authHeader: authHeader)
+        let callbacks = Array(observers.values)
+        lock.unlock()
+        callbacks.forEach { $0() }
+    }
+
+    func observe(_ callback: @escaping @Sendable () -> Void) -> UUID {
+        lock.lock()
+        defer { lock.unlock() }
+        let id = UUID()
+        observers[id] = callback
+        return id
+    }
+
+    func removeObserver(_ id: UUID) {
+        lock.lock()
+        observers[id] = nil
         lock.unlock()
     }
 
@@ -152,20 +181,37 @@ extension MutableProxyAccessPolicy: @unchecked Sendable {}
 public final class MutableRouteSecurityPolicies {
     private let lock = NSLock()
     private var policies: [LocalProxyRoute: RouteSecurity] = [:]
+    private var observers: [UUID: @Sendable () -> Void] = [:]
 
     public init(routes: [LocalProxyRoute] = []) {
         update(routes: routes)
     }
 
     public func update(routes: [LocalProxyRoute]) {
-        let nextPolicies: [LocalProxyRoute: RouteSecurity] = Dictionary(uniqueKeysWithValues: routes.compactMap { route -> (LocalProxyRoute, RouteSecurity)? in
+        let nextPolicies: [LocalProxyRoute: RouteSecurity] = Dictionary(routes.compactMap { route -> (LocalProxyRoute, RouteSecurity)? in
             guard let security = route.security, !security.isEmpty else {
                 return nil
             }
             return (route, security)
-        })
+        }, uniquingKeysWith: { _, latest in latest })
         lock.lock()
         policies = nextPolicies
+        let callbacks = Array(observers.values)
+        lock.unlock()
+        callbacks.forEach { $0() }
+    }
+
+    func observe(_ callback: @escaping @Sendable () -> Void) -> UUID {
+        lock.lock()
+        defer { lock.unlock() }
+        let id = UUID()
+        observers[id] = callback
+        return id
+    }
+
+    func removeObserver(_ id: UUID) {
+        lock.lock()
+        observers[id] = nil
         lock.unlock()
     }
 

@@ -46,6 +46,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Go proxy toolchain
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: Proxy/go.mod
+          check-latest: true
+          cache-dependency-path: Proxy/go.sum
+
       - name: Resolve version
         id: vars
         shell: bash
@@ -129,7 +136,7 @@ jobs:
           printf '%s\n' "$APPLE_NOTARY_PRIV_KEY" > "$RUNNER_TEMP/AuthKey.p8"
 
       - name: Test
-        run: swift test --scratch-path .build
+        run: scripts/test-proxy.sh
 
       - name: Build app
         env:
@@ -137,6 +144,9 @@ jobs:
           BUILD_NUMBER: ${{ steps.vars.outputs.build_number }}
           CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
         run: scripts/build-app.sh
+
+      - name: Test packaged proxy
+        run: scripts/test-packaged-proxy.sh
 
       - name: Package DMG
         env:
@@ -223,7 +233,7 @@ jobs:
             gh release upload "$TAG" "dist/${{ steps.vars.outputs.dmg_name }}" "dist/${{ steps.vars.outputs.zip_name }}" --clobber
             gh release edit "$TAG" --title "routingflare ${VERSION}" --notes-file "$NOTES_FILE"
           else
-            gh release create "$TAG" "dist/${{ steps.vars.outputs.dmg_name }}" "dist/${{ steps.vars.outputs.zip_name }}" --title "routingflare ${VERSION}" --notes-file "$NOTES_FILE"
+            gh release create "$TAG" "dist/${{ steps.vars.outputs.dmg_name }}" "dist/${{ steps.vars.outputs.zip_name }}" --target "$GITHUB_SHA" --title "routingflare ${VERSION}" --notes-file "$NOTES_FILE"
           fi
 
       - name: Configure Pages
