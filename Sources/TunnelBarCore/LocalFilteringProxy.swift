@@ -113,7 +113,11 @@ public final class LocalFilteringProxy {
 
     private func handle(_ connection: NWConnection) {
         connection.start(queue: queue)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 1_048_576) { [weak self] data, _, _, error in
+        receiveRequest(on: connection, buffer: Data())
+    }
+
+    private func receiveRequest(on connection: NWConnection, buffer: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 1_048_576) { [weak self] data, _, isComplete, error in
             guard let self else {
                 connection.cancel()
                 return
@@ -123,7 +127,20 @@ public final class LocalFilteringProxy {
                 connection.cancel()
                 return
             }
-            guard let data, let request = HTTPProxyRequest(data: data) else {
+            var requestData = buffer
+            if let data {
+                requestData.append(data)
+            }
+            let headerEnd = requestData.range(of: Data("\r\n\r\n".utf8))
+            if headerEnd == nil && !isComplete {
+                guard requestData.count <= 1_048_576 else {
+                    self.send(status: 400, body: "Bad Request", to: connection)
+                    return
+                }
+                self.receiveRequest(on: connection, buffer: requestData)
+                return
+            }
+            guard let request = HTTPProxyRequest(data: requestData) else {
                 self.send(status: 400, body: "Bad Request", to: connection)
                 return
             }
@@ -149,6 +166,11 @@ public final class LocalFilteringProxy {
             }
             logHandler("Blocked request from \(blockedIP) to :\(targetRoute.targetPort)\(request.path)")
             send(status: 403, body: "Forbidden", to: connection)
+            return
+        }
+
+        if request.isWebSocketUpgrade {
+            forwardWebSocket(request, route: targetRoute, sourceIP: sourceIP, connection: connection)
             return
         }
 
@@ -182,6 +204,84 @@ public final class LocalFilteringProxy {
             } catch {
                 self.logHandler("Proxy forward failed: \(error.localizedDescription)")
                 self.send(status: 502, body: "Bad Gateway", to: connection)
+            }
+        }
+    }
+
+    private func forwardWebSocket(
+        _ request: HTTPProxyRequest,
+        route: LocalProxyRoute,
+        sourceIP: String?,
+        connection: NWConnection
+    ) {
+        // WebSocket negotiation is a byte-level protocol. Do not rebuild this
+        // request with URLRequest: Connection, Upgrade, Sec-WebSocket-* and
+        // extension headers must reach the origin unchanged.
+        let parameters = NWParameters.tcp
+        guard let origin = NWEndpoint.Port(rawValue: UInt16(route.targetPort)) else {
+            send(status: 502, body: "Bad Gateway", to: connection)
+            return
+        }
+        let originConnection = NWConnection(
+            host: NWEndpoint.Host("127.0.0.1"),
+            port: origin,
+            using: parameters
+        )
+
+        originConnection.stateUpdateHandler = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .ready:
+                originConnection.send(content: request.rawData, completion: .contentProcessed { error in
+                    if let error {
+                        self.logHandler("WebSocket handshake forward failed: \(error.localizedDescription)")
+                        connection.cancel()
+                        originConnection.cancel()
+                        return
+                    }
+                    self.logHandler("Allowed WebSocket request from \(sourceIP ?? "unknown") to :\(route.targetPort)\(request.path)")
+                    self.relay(connection, with: originConnection)
+                })
+            case .failed(let error):
+                self.logHandler("WebSocket origin connection failed: \(error.localizedDescription)")
+                connection.cancel()
+                originConnection.cancel()
+            case .cancelled:
+                connection.cancel()
+            default:
+                break
+            }
+        }
+        originConnection.start(queue: queue)
+    }
+
+    private func relay(_ client: NWConnection, with origin: NWConnection) {
+        relay(from: client, to: origin)
+        relay(from: origin, to: client)
+    }
+
+    private func relay(from source: NWConnection, to destination: NWConnection) {
+        let relayOwner = self
+        source.receive(minimumIncompleteLength: 1, maximumLength: 1_048_576) { [weak self] data, _, isComplete, error in
+            guard self != nil else {
+                source.cancel()
+                destination.cancel()
+                return
+            }
+            if let data, !data.isEmpty {
+                destination.send(content: data, completion: .contentProcessed { sendError in
+                    if sendError != nil {
+                        source.cancel()
+                        destination.cancel()
+                    } else {
+                        relayOwner.relay(from: source, to: destination)
+                    }
+                })
+            } else if isComplete || error != nil {
+                source.cancel()
+                destination.cancel()
+            } else {
+                relayOwner.relay(from: source, to: destination)
             }
         }
     }
@@ -373,6 +473,14 @@ struct HTTPProxyRequest {
     let query: String?
     let headers: [String: String]
     let body: Data
+    let rawData: Data
+
+    var isWebSocketUpgrade: Bool {
+        let upgrade = headers.first { $0.key.caseInsensitiveCompare("upgrade") == .orderedSame }?.value
+        let connection = headers.first { $0.key.caseInsensitiveCompare("connection") == .orderedSame }?.value
+        return upgrade?.split(separator: ",").contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("websocket") == .orderedSame }) == true &&
+            connection?.split(separator: ",").contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("upgrade") == .orderedSame }) == true
+    }
 
     init?(data: Data) {
         guard let separator = data.range(of: Data("\r\n\r\n".utf8)),
@@ -405,5 +513,6 @@ struct HTTPProxyRequest {
         }
         self.headers = parsedHeaders
         self.body = data[separator.upperBound...]
+        self.rawData = data
     }
 }

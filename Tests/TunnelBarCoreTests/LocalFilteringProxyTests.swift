@@ -214,6 +214,19 @@ final class LocalFilteringProxyTests: XCTestCase {
         XCTAssertNil(filtered["upgrade"])
     }
 
+    func testWebSocketUpgradeRequestIsDetectedAndOriginalBytesArePreserved() throws {
+        let raw = "GET /socket HTTP/1.1\r\n" +
+            "Host: public.example.com\r\n" +
+            "Connection: keep-alive, Upgrade\r\n" +
+            "Upgrade: websocket\r\n" +
+            "Sec-WebSocket-Version: 13\r\n" +
+            "Sec-WebSocket-Key: abc123\r\n\r\n"
+        let request = try XCTUnwrap(HTTPProxyRequest(data: Data(raw.utf8)))
+
+        XCTAssertTrue(request.isWebSocketUpgrade)
+        XCTAssertEqual(request.rawData, Data(raw.utf8))
+    }
+
     func testProxyDoesNotForwardIdentityTransferEncodingToOrigin() throws {
         let capturedRequest = LockedValue("")
         let requestCaptured = DispatchSemaphore(value: 0)
