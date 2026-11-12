@@ -16,7 +16,8 @@ struct TunnelBarApp: App {
         MenuBarExtra {
             NativeMenuContentView(model: model)
         } label: {
-            Image(systemName: model.status.systemImage)
+            Image(nsImage: MenuBarIcon.image)
+                .accessibilityLabel("routingflare")
         }
         .menuBarExtraStyle(.menu)
     }
