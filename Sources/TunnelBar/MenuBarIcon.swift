@@ -1,5 +1,6 @@
 import AppKit
 
+@MainActor
 enum MenuBarIcon {
     static let image: NSImage = {
         let image = NSImage(size: NSSize(width: 20, height: 20), flipped: false) { _ in
