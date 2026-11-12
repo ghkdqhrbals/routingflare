@@ -199,6 +199,19 @@ func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 		ErrorLog: log.New(logWriter{p}, "", 0),
 		ModifyResponse: func(response *http.Response) error {
+			if strings.HasPrefix(mediaType, "application/grpc") && response.Header.Get("Grpc-Status") != "" && response.ContentLength == 0 && len(response.Trailer) == 0 {
+				// HTTP/2 trailers-only gRPC responses arrive here as headers. Emit their
+				// status and metadata as downstream trailers so clients see the final status.
+				response.Trailer = make(http.Header)
+				for name, values := range response.Header {
+					if !strings.EqualFold(name, "Content-Type") && !strings.EqualFold(name, "Content-Length") {
+						response.Trailer[name] = values
+						delete(response.Header, name)
+					}
+				}
+				response.Header.Del("Content-Length")
+				response.ContentLength = -1
+			}
 			if isWebSocket {
 				upgraded = response.StatusCode == http.StatusSwitchingProtocols
 				p.log(fmt.Sprintf("WebSocket handshake returned %d from :%d%s", response.StatusCode, target.TargetPort, r.URL.EscapedPath()))

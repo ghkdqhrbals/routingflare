@@ -182,7 +182,7 @@ func TestGRPCUnaryStreamingMetadataAndStatus(t *testing.T) {
 
 	_, err = rpc.UnaryCall(ctx, &pb.SimpleRequest{Payload: &pb.Payload{Body: []byte("denied")}}, grpc.Trailer(&trailer))
 	if status.Code(err) != codes.PermissionDenied || status.Convert(err).Message() != "origin permission denied" {
-		t.Fatalf("origin status changed: %v", err)
+		t.Fatalf("origin status changed: %v; proxy log: %s", err, p.log.text())
 	}
 	if got := trailer.Get("x-denial"); len(got) != 1 || got[0] != "origin" {
 		t.Fatal("non-OK trailer lost")
