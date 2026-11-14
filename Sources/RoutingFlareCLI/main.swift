@@ -504,6 +504,8 @@ struct RoutingFlareCLI {
         switch entry.state {
         case .opened:
             return " [opened]"
+        case .localPortClosed:
+            return " [local port closed]"
         case .degraded:
             return " [retrying\(messageSuffix(entry.message))]"
         case .pending:

@@ -198,6 +198,7 @@ public enum RouteRuntimeState: String, Codable, Equatable {
     case opened
     case degraded
     case pending
+    case localPortClosed
     case stopped
     case restartRequired
     case error

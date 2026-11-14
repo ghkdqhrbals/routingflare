@@ -309,6 +309,7 @@ final class TunnelBarViewModel: ObservableObject {
     @Published private var dnsCloudflaredIssue: String?
     @Published private var dnsProxyIssue: String?
     @Published private var quickProxyIssues: [LocalProxyRoute: String] = [:]
+    @Published private(set) var localPortAvailability: [Int: Bool] = [:]
 
     private let settingsStore: SettingsStoring
     private let routeStatusStore: RouteStatusStoring
@@ -385,6 +386,7 @@ final class TunnelBarViewModel: ObservableObject {
             }
         }
         saveRouteStatusSnapshot()
+        startLocalPortMonitoring()
     }
 
     var canStart: Bool {
@@ -471,9 +473,9 @@ final class TunnelBarViewModel: ObservableObject {
             RouteStatusEntry(
                 route: route,
                 kind: .dns,
-                state: dnsRouteRuntimeState,
+                state: dnsRouteRuntimeState(route),
                 publicURL: dnsPublicURL(for: route)?.absoluteString,
-                message: dnsRouteRuntimeMessage
+                message: dnsRouteRuntimeMessage(route)
             )
         }
         routeStatusStore.save(
@@ -484,12 +486,43 @@ final class TunnelBarViewModel: ObservableObject {
         )
     }
 
+    private func startLocalPortMonitoring() {
+        Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                let ports = Set((self.allQuickRoutes + self.allDNSRoutes).filter(\.isOpen).map(\.targetPort))
+                let availability = await Task.detached(priority: .utility) {
+                    Dictionary(uniqueKeysWithValues: ports.map { ($0, LocalPortProbe.isListening($0)) })
+                }.value
+                if availability != self.localPortAvailability {
+                    for (port, isListening) in availability where self.localPortAvailability[port] != nil && self.localPortAvailability[port] != isListening {
+                        self.appendLog("Local port \(port) \(isListening ? "is listening again" : "is closed")")
+                    }
+                    self.localPortAvailability = availability
+                    self.saveRouteStatusSnapshot()
+                }
+                try? await Task.sleep(for: .seconds(3))
+            }
+        }
+    }
+
+    func localPortIssue(for route: LocalProxyRoute) -> String? {
+        guard route.isOpen, localPortAvailability[route.targetPort] == false else { return nil }
+        return "Local port \(route.targetPort) is closed"
+    }
+
+    func localPortIsChecking(for route: LocalProxyRoute) -> Bool {
+        route.isOpen && status.isStarted && localPortAvailability[route.targetPort] == nil
+    }
+
     private func quickRouteRuntimeState(_ route: LocalProxyRoute) -> RouteRuntimeState {
+        if !route.isOpen { return .stopped }
+        if localPortIssue(for: route) != nil { return .localPortClosed }
         if quickProxyIssue(for: route) != nil { return .error }
         if requiresRestart {
             return .restartRequired
         }
-        if quickRouteIsPending(route) {
+        if quickRouteIsPending(route) || localPortIsChecking(for: route) {
             return .pending
         }
         if quickPublicURLs[route] != nil && status.isStarted {
@@ -502,7 +535,10 @@ final class TunnelBarViewModel: ObservableObject {
     }
 
     private func quickRouteRuntimeMessage(_ route: LocalProxyRoute) -> String? {
+        if !route.isOpen { return nil }
+        if let issue = localPortIssue(for: route) { return issue }
         if let issue = quickProxyIssue(for: route) { return issue }
+        if localPortIsChecking(for: route) { return "Checking local port" }
         if quickRouteIsPending(route) {
             return "Fetching URL"
         }
@@ -512,7 +548,9 @@ final class TunnelBarViewModel: ObservableObject {
         return nil
     }
 
-    private var dnsRouteRuntimeState: RouteRuntimeState {
+    private func dnsRouteRuntimeState(_ route: LocalProxyRoute) -> RouteRuntimeState {
+        if !route.isOpen { return .stopped }
+        if localPortIssue(for: route) != nil { return .localPortClosed }
         if dnsProxyIssue != nil { return .error }
         if let dnsCloudflaredIssue, !dnsCloudflaredIssue.isEmpty {
             return activeTunnelModes.contains(.dns) ? .degraded : .error
@@ -520,7 +558,7 @@ final class TunnelBarViewModel: ObservableObject {
         if requiresRestart {
             return .restartRequired
         }
-        if status == .starting && !activeDNSRoutes.isEmpty {
+        if (status == .starting && !activeDNSRoutes.isEmpty) || localPortIsChecking(for: route) {
             return .pending
         }
         if activeTunnelModes.contains(.dns), status.isStarted {
@@ -532,13 +570,15 @@ final class TunnelBarViewModel: ObservableObject {
         return .stopped
     }
 
-    private var dnsRouteRuntimeMessage: String? {
+    private func dnsRouteRuntimeMessage(_ route: LocalProxyRoute) -> String? {
+        if !route.isOpen { return nil }
+        if let issue = localPortIssue(for: route) { return issue }
         if let dnsProxyIssue { return dnsProxyIssue }
         if let dnsCloudflaredIssue, !dnsCloudflaredIssue.isEmpty {
             return dnsCloudflaredIssue
         }
-        if status == .starting && !activeDNSRoutes.isEmpty {
-            return "Starting"
+        if (status == .starting && !activeDNSRoutes.isEmpty) || localPortIsChecking(for: route) {
+            return localPortIsChecking(for: route) ? "Checking local port" : "Starting"
         }
         if case .error(let message) = status {
             return message
@@ -2204,8 +2244,9 @@ struct NativeMenuContentView: View {
         guard route.isOpen else {
             return .stopped
         }
+        if model.localPortIssue(for: route) != nil { return .localPortClosed }
         if model.quickProxyIssue(for: route) != nil { return .error }
-        if model.quickRouteIsPending(route) {
+        if model.quickRouteIsPending(route) || model.localPortIsChecking(for: route) {
             return .pending
         }
         if model.quickRouteIsOpen(route) && !model.requiresRestart {
@@ -2218,6 +2259,8 @@ struct NativeMenuContentView: View {
         guard route.isOpen else {
             return .stopped
         }
+        if model.localPortIssue(for: route) != nil { return .localPortClosed }
+        if model.localPortIsChecking(for: route) { return .pending }
         if model.dnsUnavailableReason != nil {
             return model.runningModes.contains(.dns) ? .degraded : .error
         }
@@ -2251,6 +2294,7 @@ struct NativeMenuContentView: View {
 
 private enum RouteMenuStatus {
     case opened
+    case localPortClosed
     case degraded
     case pending
     case restartRequired
@@ -2261,6 +2305,8 @@ private enum RouteMenuStatus {
         switch self {
         case .opened:
             return "Opened"
+        case .localPortClosed:
+            return "Local port closed"
         case .degraded:
             return "Retrying"
         case .pending:
@@ -2278,7 +2324,7 @@ private enum RouteMenuStatus {
         switch self {
         case .opened:
             return .green
-        case .degraded, .pending, .restartRequired, .error:
+        case .localPortClosed, .degraded, .pending, .restartRequired, .error:
             return .orange
         case .stopped:
             return .secondary
@@ -2906,6 +2952,9 @@ struct MenuContentView: View {
         if !route.isOpen {
             return .secondary
         }
+        if model.localPortIssue(for: route) != nil {
+            return .orange
+        }
         if isQuick {
             if model.quickRouteIsPending(route) {
                 return .orange
@@ -3365,8 +3414,8 @@ private struct RoutesTableView: View {
                                     port: route.targetPort,
                                     isRouteEnabled: route.isOpen,
                                     isActive: quickRouteIsOpen(route),
-                                    isPending: quickRouteIsPending(route),
-                                    statusText: route.isOpen ? nil : "Closed. Reopen assigns a new random DNS address.",
+                                    isPending: model.localPortIssue(for: route) != nil || quickRouteIsPending(route) || model.localPortIsChecking(for: route),
+                                    statusText: route.isOpen ? model.localPortIssue(for: route) : "Closed. Reopen assigns a new random DNS address.",
                                     isSelected: isExpanded(route, kind: .quickURL),
                                     select: { selectQuickRoute(route) },
                                     toggle: { toggleQuickRoute(route) },
@@ -3385,8 +3434,8 @@ private struct RoutesTableView: View {
                                     port: route.targetPort,
                                     isRouteEnabled: route.isOpen,
                                     isActive: dnsRouteIsOpen(route),
-                                    isPending: route.isOpen && dnsUnavailableReason != nil,
-                                    statusText: route.isOpen ? dnsUnavailableReason : "Closed",
+                                    isPending: route.isOpen && (model.localPortIssue(for: route) != nil || dnsUnavailableReason != nil || model.localPortIsChecking(for: route)),
+                                    statusText: route.isOpen ? (model.localPortIssue(for: route) ?? dnsUnavailableReason) : "Closed",
                                     isSelected: isExpanded(route, kind: .dns),
                                     select: { selectDNSRoute(route) },
                                     toggle: { toggleDNSRoute(route) },

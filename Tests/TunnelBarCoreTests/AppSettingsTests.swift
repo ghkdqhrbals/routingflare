@@ -101,4 +101,17 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(decoded.quickRoutes.first?.isOpen, false)
         XCTAssertEqual(decoded.dnsRoutes.first?.isOpen, true)
     }
+
+    func testClosedLocalPortStatusRoundTrip() throws {
+        let entry = RouteStatusEntry(
+            route: LocalProxyRoute(hostname: "", targetPort: 4000, targetPath: "/"),
+            kind: .quickURL,
+            state: .localPortClosed,
+            message: "Local port 4000 is closed"
+        )
+
+        let decoded = try JSONDecoder().decode(RouteStatusEntry.self, from: JSONEncoder().encode(entry))
+
+        XCTAssertEqual(decoded, entry)
+    }
 }
