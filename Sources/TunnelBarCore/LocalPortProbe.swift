@@ -33,3 +33,15 @@ public enum LocalPortProbe {
         return getsockopt(descriptor, SOL_SOCKET, SO_ERROR, &socketError, &size) == 0 && socketError == 0
     }
 }
+
+public enum LocalPortAvailabilitySummary: Equatable {
+    case ready
+    case checking
+    case closed
+
+    public static func summarize(ports: [Int], availability: [Int: Bool]) -> Self {
+        if ports.contains(where: { availability[$0] == false }) { return .closed }
+        if ports.contains(where: { availability[$0] == nil }) { return .checking }
+        return .ready
+    }
+}

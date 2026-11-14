@@ -34,7 +34,7 @@ Manual install:
 - DNS: connect your own hostname to a local port and path.
 - Security: per-route inbound IP allowlist and optional auth header.
 - Logs: Cloudflare Tunnel and local proxy events.
-- Local port status: shows when a route's target port is closed and updates when it starts listening again.
+- Local port status: checks every 5 seconds, flags closed target ports in route and tunnel status, and updates when a server starts listening again.
 - Updates: check, install, and restart from the app.
 - CLI: add, remove, list, start, stop, update, and edit settings from Terminal.
 

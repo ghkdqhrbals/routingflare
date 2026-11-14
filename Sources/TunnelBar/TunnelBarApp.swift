@@ -117,6 +117,8 @@ private enum AppTypography {
 private enum TunnelConfigurationState {
     case healthy
     case starting
+    case checking
+    case localPortClosed
     case down
     case inactive
 
@@ -126,6 +128,10 @@ private enum TunnelConfigurationState {
             return "Healthy"
         case .starting:
             return "Starting"
+        case .checking:
+            return "Checking"
+        case .localPortClosed:
+            return "Local port closed"
         case .down:
             return "Down"
         case .inactive:
@@ -137,7 +143,7 @@ private enum TunnelConfigurationState {
         switch self {
         case .healthy:
             return .green
-        case .starting:
+        case .starting, .checking, .localPortClosed:
             return .orange
         case .down:
             return .red
@@ -501,7 +507,7 @@ final class TunnelBarViewModel: ObservableObject {
                     self.localPortAvailability = availability
                     self.saveRouteStatusSnapshot()
                 }
-                try? await Task.sleep(for: .seconds(3))
+                try? await Task.sleep(for: .seconds(5))
             }
         }
     }
@@ -1867,11 +1873,19 @@ final class TunnelBarViewModel: ObservableObject {
             let openRoutes = activeQuickRoutes
             let pending = openRoutes.contains(where: quickRouteIsPending)
             let healthy = !openRoutes.isEmpty && openRoutes.allSatisfy { quickRouteIsOpen($0) }
+            let localPorts = LocalPortAvailabilitySummary.summarize(
+                ports: openRoutes.map(\.targetPort),
+                availability: localPortAvailability
+            )
             let state: TunnelConfigurationState
             if openRoutes.isEmpty {
                 state = .inactive
+            } else if localPorts == .closed {
+                state = .localPortClosed
             } else if pending {
                 state = .starting
+            } else if localPorts == .checking {
+                state = .checking
             } else if healthy && activeTunnelModes.contains(.quickURL) && !requiresRestart {
                 state = .healthy
             } else {
@@ -1891,13 +1905,21 @@ final class TunnelBarViewModel: ObservableObject {
             let tunnelID = settings.dnsTunnelID.trimmingCharacters(in: .whitespacesAndNewlines)
             let openRoutes = activeDNSRoutes
             let hasConfiguration = !tunnelID.isEmpty && !settings.dnsCredentialsFile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let localPorts = LocalPortAvailabilitySummary.summarize(
+                ports: openRoutes.map(\.targetPort),
+                availability: localPortAvailability
+            )
             let state: TunnelConfigurationState
             if openRoutes.isEmpty {
                 state = .inactive
             } else if !hasConfiguration || dnsUnavailableReason != nil {
                 state = .down
+            } else if localPorts == .closed {
+                state = .localPortClosed
             } else if status == .starting {
                 state = .starting
+            } else if localPorts == .checking {
+                state = .checking
             } else if activeTunnelModes.contains(.dns) && !requiresRestart {
                 state = .healthy
             } else {
@@ -2734,7 +2756,7 @@ struct MenuContentView: View {
                     Text("Name")
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Text("Status")
-                        .frame(width: 92, alignment: .leading)
+                        .frame(width: 124, alignment: .leading)
                     Text("Replicas")
                         .frame(width: 72, alignment: .leading)
                     Text("Routes")
@@ -2783,11 +2805,12 @@ struct MenuContentView: View {
                 Text(row.state.label)
                     .font(AppTypography.meta)
                     .foregroundStyle(row.state.color)
+                    .lineLimit(1)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
                     .background(row.state.color.opacity(0.13))
                     .clipShape(Capsule())
-                    .frame(width: 92, alignment: .leading)
+                    .frame(width: 124, alignment: .leading)
 
                 Text(String(row.replicas))
                     .font(AppTypography.content)

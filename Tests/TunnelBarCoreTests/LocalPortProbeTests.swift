@@ -40,4 +40,23 @@ final class LocalPortProbeTests: XCTestCase {
         XCTAssertFalse(LocalPortProbe.isListening(0))
         XCTAssertFalse(LocalPortProbe.isListening(65536))
     }
+
+    func testTunnelSummaryRequiresEveryOpenTargetPort() {
+        XCTAssertEqual(
+            LocalPortAvailabilitySummary.summarize(ports: [3000, 8080], availability: [3000: true, 8080: false]),
+            .closed
+        )
+        XCTAssertEqual(
+            LocalPortAvailabilitySummary.summarize(ports: [3000, 8080], availability: [3000: false]),
+            .closed
+        )
+        XCTAssertEqual(
+            LocalPortAvailabilitySummary.summarize(ports: [3000, 8080], availability: [3000: true]),
+            .checking
+        )
+        XCTAssertEqual(
+            LocalPortAvailabilitySummary.summarize(ports: [3000, 8080], availability: [3000: true, 8080: true]),
+            .ready
+        )
+    }
 }
